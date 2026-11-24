@@ -21,6 +21,7 @@
 - **Messagerie** : conversations, messages non lus, favoris, réponses et envoi de messages (conservés localement).
 - **Ressources** : bibliothèque filtrable, favoris et fiches détaillées.
 - **Recherche universelle ⌘K** : pages, actions, devoirs, messages, matières et ressources.
+- **Connexion multi-fournisseurs** : redirection réelle vers MonLycée.net, ÉduConnect ou l’ENT de ton établissement, avec flux OIDC + PKCE lorsque l’ENT autorise un client public.
 - **Personnalisation** : thème sombre/clair, cinq accents, densité compacte, réduction des animations.
 - **Données locales** : export / import JSON, réinitialisation de la démo.
 - **PWA** : installation sur l'écran d'accueil et cache hors ligne.
@@ -84,11 +85,21 @@ scripts/
 public/           favicon, manifest PWA, service worker
 ```
 
+## 🔐 Connexion aux fournisseurs
+
+L’écran **Connexion** propose :
+
+- **MonLycée.net** — redirection vers le portail officiel `psn.monlycee.net`. Un flux **OpenID Connect Authorization Code + PKCE** est intégré (découverte, échange de code, vérification du jeton d’identité via JWKS, nonce et state). Il s’active lorsqu’un **client OIDC public** est créé par l’administrateur de l’ENT avec l’URL de redirection affichée dans Pr8note. Aucun secret client n’est stocké dans le navigateur.
+- **ÉduConnect** — redirection vers le portail national.
+- **Un autre ENT / PRONOTE** — saisie de l’adresse de l’établissement, puis redirection officielle.
+
+Sans client OIDC autorisé, la redirection vers MonLycée.net fonctionne, mais Pr8note ne peut pas récupérer la session au retour. La configuration se fait dans **Connexion → OIDC · MonLycée.net** ; le client ID reste sur l’appareil.
+
 ## 🔐 À propos des données
 
-Cette première version fonctionne avec un **espace de démonstration complet** : données fictives, aucune connexion à un serveur PRONOTE. PRONOTE est un logiciel propriétaire d'Index Éducation ; toute synchronisation réelle nécessitera l'autorisation et le connecteur de l'établissement.
+Pr8note fonctionne avec un **espace de démonstration complet** : données fictives, aucune synchronisation PRONOTE. La connexion OIDC vérifie l’identité, mais PRONOTE reste un logiciel propriétaire d’Index Éducation ; toute récupération réelle de notes ou d’emploi du temps nécessitera l’autorisation et le connecteur de l’établissement.
 
-Les devoirs cochés, messages lus, réponses, favoris et réglages sont stockés dans le navigateur (localStorage). L'export JSON permet de les sauvegarder et de les réimporter.
+Les devoirs cochés, messages lus, réponses, favoris et réglages sont stockés dans le navigateur (localStorage). L’export JSON permet de les sauvegarder et de les réimporter.
 
 ## ⚠️ Indépendance
 

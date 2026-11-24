@@ -1,26 +1,40 @@
 import { useRef, useState, type ChangeEvent } from 'react'
+import { Link } from 'react-router-dom'
 import {
   ArrowRight,
+  Building2,
   CalendarDays,
   CheckCircle2,
+  ExternalLink,
   GraduationCap,
   Info,
-  Lock,
+  Loader2,
+  LockKeyhole,
   ShieldCheck,
   Sparkles,
   TrendingUp,
   Upload,
-  WifiOff,
 } from 'lucide-react'
 import { STUDENT } from '../data/seed'
 import { useStore } from '../lib/store'
-import { Avatar, Badge, Modal } from '../components/ui'
+import { Badge } from '../components/ui'
 import { LogoMark, Wordmark } from '../components/Logo'
+import {
+  EDUC_CONNECT_LOGIN_URL,
+  MONLYCEE_LOGIN_URL,
+  authErrorMessage,
+  beginOidcLogin,
+  isWebAuthAvailable,
+  loadOidcConfig,
+} from '../lib/auth'
 
 export function Login() {
   const { signIn, importData, toast } = useStore()
-  const [pronoteOpen, setPronoteOpen] = useState(false)
+  const [starting, setStarting] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
+  const oidcConfigured = Boolean(loadOidcConfig())
+  const webAuth = isWebAuthAvailable()
+  const oidcReady = oidcConfigured && webAuth
 
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -31,6 +45,17 @@ export function Login() {
       toast(error instanceof Error ? error.message : 'Import impossible.', 'error')
     } finally {
       event.target.value = ''
+    }
+  }
+
+  const handleOidc = async () => {
+    if (starting) return
+    setStarting(true)
+    try {
+      await beginOidcLogin()
+    } catch (error) {
+      toast(authErrorMessage(error), 'error')
+      setStarting(false)
     }
   }
 
@@ -80,11 +105,11 @@ export function Login() {
             </li>
             <li>
               <span className="login-feature-icon">
-                <WifiOff size={17} />
+                <ShieldCheck size={17} />
               </span>
               <div>
-                <strong>Un espace qui reste avec toi</strong>
-                <span>Accessible hors ligne et exportable à tout moment.</span>
+                <strong>Une connexion chez ton ENT</strong>
+                <span>MonLycée.net, ÉduConnect ou le portail de ton établissement.</span>
               </div>
             </li>
           </ul>
@@ -136,24 +161,90 @@ export function Login() {
 
         <div className="login-card">
           <Badge tone="accent" className="login-badge">
-            Espace de démonstration
+            <ShieldCheck size={13} /> Connexion scolaire
           </Badge>
 
-          <Avatar
-            name="Léo Marchand"
-            color="linear-gradient(135deg, var(--accent), var(--accent-2))"
-            size={66}
-            className="login-avatar"
-          />
-
-          <h2>Content de te revoir, Léo.</h2>
+          <h2>Bienvenue dans Pr8note.</h2>
           <p className="login-sub">
-            Ton espace est prêt. Retrouve ta journée, tes devoirs et tes notes — tout est déjà à sa place.
+            Connecte-toi avec ton établissement pour retrouver ton espace. Pr8note ne voit jamais ton mot
+            de passe.
           </p>
 
-          <button type="button" className="btn btn-primary btn-block btn-lg" onClick={() => signIn(STUDENT)}>
-            Ouvrir mon espace
-            <ArrowRight size={18} />
+          <div className="login-provider">
+            <div className="login-provider-top">
+              <span className="login-provider-mark">ML</span>
+              <div className="login-provider-copy">
+                <strong>MonLycée.net</strong>
+                <span>Portail officiel · Île-de-France</span>
+              </div>
+              <Badge tone="accent">Principal</Badge>
+            </div>
+
+            {oidcReady ? (
+              <button
+                type="button"
+                className="btn btn-primary btn-block btn-lg"
+                onClick={handleOidc}
+                disabled={starting}
+              >
+                {starting ? <Loader2 size={17} className="spin" /> : <LockKeyhole size={17} />}
+                {starting ? 'Ouverture du portail…' : 'Continuer avec MonLycée.net'}
+              </button>
+            ) : (
+              <a className="btn btn-primary btn-block btn-lg" href={MONLYCEE_LOGIN_URL}>
+                <ExternalLink size={17} />
+                Continuer avec MonLycée.net
+              </a>
+            )}
+
+            <p className="login-provider-destination">
+              <ExternalLink size={11} />
+              {oidcReady
+                ? 'Connexion sécurisée via le portail MonLycée.net'
+                : 'Redirection vers psn.monlycee.net'}
+            </p>
+          </div>
+
+          <div className="login-provider-alt">
+            <a className="btn btn-outline" href={EDUC_CONNECT_LOGIN_URL}>
+              <ExternalLink size={14} /> ÉduConnect
+            </a>
+            <Link className="btn btn-outline" to="/connexion">
+              <Building2 size={14} /> Autre ENT
+            </Link>
+          </div>
+
+          {oidcConfigured && !webAuth ? (
+            <div className="login-auth-note">
+              <Info size={15} />
+              <p>
+                La connexion OIDC active est disponible dans la version web. Depuis l’app macOS, le
+                portail s’ouvre dans ton navigateur.
+              </p>
+            </div>
+          ) : oidcReady ? (
+            <div className="login-auth-note ok">
+              <ShieldCheck size={15} />
+              <p>Connexion OIDC active : ton identité sera vérifiée par MonLycée.net.</p>
+            </div>
+          ) : (
+            <div className="login-auth-note">
+              <Info size={15} />
+              <p>
+                Le portail officiel s’ouvre dans cet onglet. Pour que ta session revienne dans Pr8note,
+                ton ENT doit autoriser l’application.{' '}
+                <Link to="/connexion">En savoir plus</Link>
+              </p>
+            </div>
+          )}
+
+          <div className="login-divider">
+            <span>ou explorer</span>
+          </div>
+
+          <button type="button" className="btn btn-ghost btn-block" onClick={() => signIn(STUDENT)}>
+            <ArrowRight size={16} />
+            Ouvrir la démonstration
           </button>
 
           <button type="button" className="btn btn-ghost btn-block" onClick={() => fileInput.current?.click()}>
@@ -168,91 +259,20 @@ export function Login() {
             hidden
           />
 
-          <div className="login-divider">
-            <span>ou</span>
-          </div>
-
-          <button type="button" className="btn btn-outline btn-block" onClick={() => setPronoteOpen(true)}>
-            <Lock size={15} />
-            Connexion à mon établissement
-          </button>
-
           <div className="login-meta">
             <span>
-              <ShieldCheck size={14} /> Tes données restent sur cet appareil
+              <ShieldCheck size={14} /> Aucun mot de passe stocké par Pr8note
             </span>
             <span>
-              <GraduationCap size={14} /> Première 4 · Lycée Victor Hugo
+              <GraduationCap size={14} /> Notes et planning de démonstration
             </span>
           </div>
 
           <p className="login-fineprint">
-            Mode démo avec des données fictives. Pr8note n’est pas affilié à Index Éducation ni à PRONOTE.
+            Pr8note est un client indépendant, sans affiliation avec Index Éducation ni PRONOTE.
           </p>
         </div>
       </section>
-
-      <Modal
-        open={pronoteOpen}
-        onClose={() => setPronoteOpen(false)}
-        title="Connexion à ton établissement"
-        subtitle="Une seule porte d’entrée, toutes tes infos."
-        footer={
-          <>
-            <button type="button" className="btn btn-ghost" onClick={() => setPronoteOpen(false)}>
-              Plus tard
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => {
-                setPronoteOpen(false)
-                signIn(STUDENT)
-              }}
-            >
-              Explorer en mode démo <ArrowRight size={16} />
-            </button>
-          </>
-        }
-      >
-        <div className="notice">
-          <Info size={18} />
-          <div>
-            <strong>PRONOTE est un logiciel propriétaire d’Index Éducation.</strong>
-            <p>
-              La synchronisation réelle dépend de l’accès API autorisé par ton établissement. Pr8note est
-              aujourd’hui livré avec un espace de démonstration complet pour que tu puisses tout essayer.
-            </p>
-          </div>
-        </div>
-        <ul className="modal-list">
-          <li>
-            <span>1</span>
-            <div>
-              <strong>Adresse de l’établissement</strong>
-              <p>PRONOTE, ENT ou portail de ton lycée.</p>
-            </div>
-          </li>
-          <li>
-            <span>2</span>
-            <div>
-              <strong>Identifiants remis par la vie scolaire</strong>
-              <p>Ton identifiant élève et ton mot de passe habituel.</p>
-            </div>
-          </li>
-          <li>
-            <span>3</span>
-            <div>
-              <strong>Le connecteur de ton lycée</strong>
-              <p>Une autorisation à demander à l’administrateur du réseau.</p>
-            </div>
-          </li>
-        </ul>
-        <p className="modal-note">
-          Le mode démo reprend exactement l’expérience de l’application : notes, emploi du temps,
-          devoirs, messagerie et réglages.
-        </p>
-      </Modal>
     </div>
   )
 }

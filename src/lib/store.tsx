@@ -130,7 +130,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const signIn = useCallback((student: Student = STUDENT) => {
-    setState((prev) => ({ ...prev, session: student }))
+    setState((prev) => ({
+      ...prev,
+      session: {
+        ...student,
+        authMethod: student.authMethod ?? 'demo',
+        authLabel: student.authLabel ?? 'Démonstration',
+      },
+    }))
   }, [])
 
   const signOut = useCallback(() => {

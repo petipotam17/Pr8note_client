@@ -1,4 +1,5 @@
 import { useRef, useState, type ChangeEvent } from 'react'
+import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
   Check,
@@ -63,9 +64,15 @@ export function Settings() {
               </h2>
               <div className="profile-badges">
                 <Badge tone="accent">{student.className}</Badge>
-                <Badge tone="neutral">
-                  <Sparkles size={11} /> Compte démo
-                </Badge>
+                {student.authMethod === 'oidc' ? (
+                  <Badge tone="good">
+                    <ShieldCheck size={11} /> {student.authLabel ?? 'Connexion OIDC'}
+                  </Badge>
+                ) : (
+                  <Badge tone="neutral">
+                    <Sparkles size={11} /> Compte démo
+                  </Badge>
+                )}
               </div>
             </div>
           </div>
@@ -75,14 +82,15 @@ export function Settings() {
                 <School size={15} /> Établissement
               </span>
               <strong>
-                {student.establishment} · {student.city}
+                {student.establishment}
+                {student.city ? ` · ${student.city}` : ''}
               </strong>
             </div>
             <div>
               <span>
                 <Mail size={15} /> E-mail
               </span>
-              <strong>{student.email}</strong>
+              <strong>{student.email || 'Non transmis par le fournisseur'}</strong>
             </div>
             <div>
               <span>
@@ -90,7 +98,20 @@ export function Settings() {
               </span>
               <strong>{student.level}</strong>
             </div>
+            <div>
+              <span>
+                <ShieldCheck size={15} /> Connexion
+              </span>
+              <strong>
+                {student.authMethod === 'oidc'
+                  ? `${student.authLabel ?? 'OIDC'} · identité vérifiée`
+                  : 'Démonstration locale'}
+              </strong>
+            </div>
           </div>
+          <Link to="/connexion" className="btn btn-ghost btn-block btn-sm">
+            <ShieldCheck size={15} /> Gérer la connexion
+          </Link>
           <button type="button" className="btn btn-ghost btn-block btn-sm" onClick={signOut}>
             <LogOut size={15} /> Se déconnecter
           </button>

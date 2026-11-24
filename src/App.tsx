@@ -4,6 +4,9 @@ import { Splash } from './components/Splash'
 import { StoreProvider, useStore } from './lib/store'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
+import { AuthProviders } from './pages/AuthProviders'
+import { AuthCallback } from './components/AuthCallback'
+import { clearAuthQuery, isAuthCallback } from './lib/auth'
 import { Dashboard } from './pages/Dashboard'
 import { Timetable } from './pages/Timetable'
 import { Grades } from './pages/Grades'
@@ -15,11 +18,11 @@ import { Settings } from './pages/Settings'
 
 function AppRoutes() {
   const { state } = useStore()
-  if (!state.session) return <Login />
 
   return (
     <Routes>
-      <Route element={<Layout />}>
+      <Route path="/connexion" element={<AuthProviders />} />
+      <Route element={state.session ? <Layout /> : <Login />}>
         <Route index element={<Dashboard />} />
         <Route path="/emploi-du-temps" element={<Timetable />} />
         <Route path="/notes" element={<Grades />} />
@@ -36,16 +39,25 @@ function AppRoutes() {
 
 export default function App() {
   const [splashDone, setSplashDone] = useState(false)
+  const [callbackActive, setCallbackActive] = useState(() => isAuthCallback())
   const finishSplash = useCallback(() => setSplashDone(true), [])
+
+  const finishCallback = useCallback((destination?: string) => {
+    clearAuthQuery()
+    if (destination) window.location.hash = destination.replace(/^#/, '')
+    setCallbackActive(false)
+  }, [])
 
   return (
     <StoreProvider>
-      {splashDone ? (
+      {!splashDone ? (
+        <Splash onFinish={finishSplash} />
+      ) : callbackActive ? (
+        <AuthCallback onFinish={finishCallback} />
+      ) : (
         <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <AppRoutes />
         </HashRouter>
-      ) : (
-        <Splash onFinish={finishSplash} />
       )}
     </StoreProvider>
   )

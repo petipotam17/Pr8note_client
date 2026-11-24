@@ -19,6 +19,9 @@ export interface Student {
   establishment: string
   city: string
   email: string
+  authMethod?: 'demo' | 'oidc'
+  authLabel?: string
+  subject?: string
 }
 
 export interface Subject {

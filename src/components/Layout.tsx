@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Bell,
   BookOpen,
@@ -15,6 +15,7 @@ import {
   PanelLeftOpen,
   Search,
   Settings2,
+  ShieldCheck,
   Sun,
   type LucideIcon,
 } from 'lucide-react'
@@ -326,6 +327,9 @@ export function Layout() {
                       </div>
                     </div>
                     <div className="account-menu">
+                      <button type="button" onClick={() => navigate('/connexion')}>
+                        <ShieldCheck size={16} /> Connexion & fournisseurs
+                      </button>
                       <button type="button" onClick={() => navigate('/reglages')}>
                         <Settings2 size={16} /> Réglages
                       </button>
@@ -336,7 +340,11 @@ export function Layout() {
                         <LogOut size={16} /> Se déconnecter
                       </button>
                     </div>
-                    <p className="account-foot">Pr8note · espace de démonstration</p>
+                    <p className="account-foot">
+                      {student.authMethod === 'oidc'
+                        ? `Connecté via ${student.authLabel ?? 'ton fournisseur'}`
+                        : 'Pr8note · espace de démonstration'}
+                    </p>
                   </div>
                 </>
               )}
@@ -345,6 +353,16 @@ export function Layout() {
         </header>
 
         <main className="content">
+          {student.authMethod === 'oidc' && (
+            <div className="demo-banner">
+              <ShieldCheck size={15} />
+              <span>
+                <strong>{student.authLabel ?? 'Connexion vérifiée'}.</strong> Ton identité est vérifiée ;
+                les notes, devoirs et l’emploi du temps restent des données de démonstration.
+              </span>
+              <Link to="/connexion">Gérer</Link>
+            </div>
+          )}
           <Outlet />
         </main>
 
