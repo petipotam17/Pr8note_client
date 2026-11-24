@@ -716,10 +716,8 @@ export async function loginToMonlycee(username, password, options = {}) {
   }
 
   if (!jar.hasPortalSession()) {
-    const detail = extractLoginError(resultHtml)
-    if (detail) {
-      throw new LoginError('LOGIN_FAILED', `MonLycée a refusé la connexion : ${detail}`, 401)
-    }
+    // Ne jamais renvoyer le message brut de Keycloak : il peut contenir des
+    // détails sur le compte ou la configuration du portail.
     throw new LoginError(
       'NO_SESSION',
       'MonLycée n’a pas ouvert de session. Vérifie tes identifiants ou ouvre le portail officiel.',
