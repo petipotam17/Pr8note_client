@@ -1,0 +1,10 @@
+node_modules
+dist
+build
+.DS_Store
+.dev
+.freebuff
+*.log
+.env
+.env.*
+!.env.example
