@@ -8,6 +8,7 @@ import {
   ExternalLink,
   GraduationCap,
   Info,
+  KeyRound,
   Loader2,
   LockKeyhole,
   ShieldCheck,
@@ -191,17 +192,17 @@ export function Login() {
                 {starting ? 'Ouverture du portail…' : 'Continuer avec MonLycée.net'}
               </button>
             ) : (
-              <a className="btn btn-primary btn-block btn-lg" href={MONLYCEE_LOGIN_URL}>
-                <ExternalLink size={17} />
-                Continuer avec MonLycée.net
-              </a>
+              <Link className="btn btn-primary btn-block btn-lg" to="/connexion">
+                <KeyRound size={17} />
+                Configurer la connexion MonLycée
+              </Link>
             )}
 
             <p className="login-provider-destination">
               <ExternalLink size={11} />
               {oidcReady
                 ? 'Connexion sécurisée via le portail MonLycée.net'
-                : 'Redirection vers psn.monlycee.net'}
+                : 'Le portail s’ouvre sans retour automatique'}
             </p>
           </div>
 
@@ -219,7 +220,8 @@ export function Login() {
               <Info size={15} />
               <p>
                 La connexion OIDC active est disponible dans la version web. Depuis l’app macOS, le
-                portail s’ouvre dans ton navigateur.
+                portail s’ouvre dans ton navigateur.{' '}
+                <a href={MONLYCEE_LOGIN_URL}>Ouvrir le portail</a>
               </p>
             </div>
           ) : oidcReady ? (
@@ -231,9 +233,11 @@ export function Login() {
             <div className="login-auth-note">
               <Info size={15} />
               <p>
-                Le portail officiel s’ouvre dans cet onglet. Pour que ta session revienne dans Pr8note,
-                ton ENT doit autoriser l’application.{' '}
-                <Link to="/connexion">En savoir plus</Link>
+                MonLycée.net ne peut pas encore renvoyer ta session : un client OIDC doit être autorisé
+                par ton ENT.{' '}
+                <Link to="/connexion">Configurer</Link>
+                {' · '}
+                <a href={MONLYCEE_LOGIN_URL}>Ouvrir le portail sans retour</a>
               </p>
             </div>
           )}

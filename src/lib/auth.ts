@@ -207,7 +207,7 @@ export async function beginOidcLogin(): Promise<void> {
 
 export function isAuthCallback(): boolean {
   const params = new URLSearchParams(window.location.search)
-  return params.has('code') || (params.has('error') && params.has('state'))
+  return params.has('code') || params.has('error')
 }
 
 export function clearAuthQuery(): void {

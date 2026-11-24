@@ -6294,6 +6294,44 @@ html[data-motion="off"] *::after {
   color: var(--muted);
 }
 
+.auth-gate {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 28%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+
+.auth-gate > svg {
+  margin-top: 2px;
+  color: var(--warn);
+  flex-shrink: 0;
+}
+
+.auth-gate > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.auth-gate strong {
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.auth-gate p {
+  margin-top: 2px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.auth-gate .btn {
+  flex-shrink: 0;
+}
+
 .auth-provider-grid {
   display: grid;
   grid-template-columns: 1.12fr 0.88fr;
@@ -6417,6 +6455,10 @@ html[data-motion="off"] *::after {
 
 .auth-provider-status.ok {
   color: color-mix(in srgb, var(--good) 78%, var(--text));
+}
+
+.auth-provider-status.warn {
+  color: color-mix(in srgb, var(--warn) 72%, var(--muted-2));
 }
 
 .auth-provider-hint {
@@ -6970,6 +7012,14 @@ html[data-motion="off"] *::after {
 
   .auth-provider-top > .badge {
     margin-left: auto;
+  }
+
+  .auth-gate {
+    flex-wrap: wrap;
+  }
+
+  .auth-gate .btn {
+    width: 100%;
   }
 
   .auth-custom-form {

@@ -93,7 +93,7 @@ L’écran **Connexion** propose :
 - **ÉduConnect** — redirection vers le portail national.
 - **Un autre ENT / PRONOTE** — saisie de l’adresse de l’établissement, puis redirection officielle.
 
-Sans client OIDC autorisé, la redirection vers MonLycée.net fonctionne, mais Pr8note ne peut pas récupérer la session au retour. La configuration se fait dans **Connexion → OIDC · MonLycée.net** ; le client ID reste sur l’appareil.
+Sans client OIDC autorisé, le bouton principal ouvre la configuration Pr8note au lieu de faire un aller sans retour. Le portail reste accessible par un lien secondaire explicite, mais aucune session ne revient dans l’application. La configuration se fait dans **Connexion → OIDC · MonLycée.net** ; le client ID reste sur l’appareil.
 
 ## 🔐 À propos des données
 

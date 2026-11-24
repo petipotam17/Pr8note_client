@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -48,6 +48,8 @@ export function AuthProviders() {
   const [status, setStatus] = useState<ServerStatus>(null)
   const [customUrl, setCustomUrl] = useState('')
   const [customError, setCustomError] = useState('')
+  const configSectionRef = useRef<HTMLElement>(null)
+  const clientIdRef = useRef<HTMLInputElement>(null)
 
   const redirectUri = getRedirectUri()
   const webAuth = isWebAuthAvailable()
@@ -64,6 +66,11 @@ export function AuthProviders() {
       toast(authErrorMessage(error), 'error')
       setStarting(false)
     }
+  }
+
+  const focusSetup = () => {
+    configSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    window.setTimeout(() => clientIdRef.current?.focus(), 350)
   }
 
   const handleSave = () => {
@@ -171,10 +178,27 @@ Merci d’avance.`
           </Badge>
           <h1>Choisis ton fournisseur d’identité.</h1>
           <p>
-            Pr8note t’envoie vers le portail officiel de ton établissement. Ton mot de passe ne transite
-            jamais par l’application.
+            Pr8note peut ouvrir le portail officiel de ton établissement. Pour revenir avec ta session,
+            la connexion OIDC doit être autorisée par ton ENT — ton mot de passe ne transite jamais par
+            l’application.
           </p>
         </div>
+
+        {!oidcReady && (
+          <div className="auth-gate">
+            <Info size={18} />
+            <div>
+              <strong>Le retour vers Pr8note n’est pas encore activé.</strong>
+              <p>
+                MonLycée.net doit autoriser Pr8note comme client OIDC public. Sans cela, le portail
+                s’ouvre mais ne peut pas renvoyer ta session. La configuration se fait ci-dessous.
+              </p>
+            </div>
+            <button type="button" className="btn btn-primary btn-sm" onClick={focusSetup}>
+              Configurer <ArrowRight size={14} />
+            </button>
+          </div>
+        )}
 
         <div className="auth-provider-grid">
           <article className="auth-provider-card auth-provider-featured">
@@ -206,32 +230,30 @@ Merci d’avance.`
                   {starting ? 'Ouverture du portail…' : `Se connecter avec ${monlycee.name}`}
                 </button>
               ) : (
-                <a className="btn btn-primary btn-block btn-lg" href={MONLYCEE_LOGIN_URL}>
-                  <ExternalLink size={17} />
-                  Ouvrir {monlycee.name}
-                </a>
+                <button type="button" className="btn btn-primary btn-block btn-lg" onClick={focusSetup}>
+                  <KeyRound size={17} />
+                  Configurer la connexion
+                </button>
               )}
-              {oidcReady && (
-                <a className="btn btn-ghost btn-block btn-sm" href={MONLYCEE_LOGIN_URL}>
-                  Ouvrir le portail officiel <ExternalLink size={13} />
-                </a>
-              )}
+              <a className="btn btn-ghost btn-block btn-sm" href={MONLYCEE_LOGIN_URL}>
+                Ouvrir le portail officiel <ExternalLink size={13} />
+              </a>
             </div>
-            <div className={`auth-provider-status ${oidcReady ? 'ok' : ''}`}>
+            <div className={`auth-provider-status ${oidcReady ? 'ok' : 'warn'}`}>
               {oidcReady ? (
                 <>
                   <CheckCircle2 size={14} /> Connexion OIDC configurée — la session revient dans Pr8note
                 </>
               ) : (
                 <>
-                  <ExternalLink size={14} /> Redirection officielle — la session ne revient pas sans client
-                  OIDC autorisé
+                  <KeyRound size={14} /> Retour automatique inactif — client OIDC à configurer
                 </>
               )}
             </div>
             <p className="auth-provider-hint">
-              Destination : <strong>psn.monlycee.net</strong> · Tu peux y utiliser ton compte ENT ou
-              ÉduConnect.
+              Le lien officiel ouvre <strong>psn.monlycee.net</strong> dans cet onglet. Utilise-le
+              seulement si tu acceptes de revenir manuellement : aucune session ne sera transmise à
+              Pr8note.
             </p>
           </article>
 
@@ -306,7 +328,7 @@ Merci d’avance.`
           </p>
         </section>
 
-        <section className="card auth-config-card">
+        <section className="card auth-config-card" id="oidc-config" ref={configSectionRef}>
           <div className="auth-config-head">
             <div>
               <p className="eyebrow">
@@ -342,6 +364,7 @@ Merci d’avance.`
               <label htmlFor="client-id">Client ID public</label>
               <input
                 id="client-id"
+                ref={clientIdRef}
                 type="text"
                 autoComplete="off"
                 spellCheck={false}
@@ -384,8 +407,8 @@ Merci d’avance.`
                 <li>Colle le client ID reçu ici, puis teste la connexion.</li>
               </ol>
               <p>
-                Sans ce client, le bouton ouvre bien le portail officiel, mais Pr8note ne peut pas
-                récupérer ta session.
+                Sans ce client, Pr8note ne peut pas récupérer ta session. Le portail reste accessible
+                via le lien secondaire, mais aucune authentification ne reviendra dans l’application.
               </p>
               <button
                 type="button"
