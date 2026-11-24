@@ -35,6 +35,7 @@ import { STUDENT } from '../data/seed'
 import { useStore } from '../lib/store'
 import { Badge } from '../components/ui'
 import { LogoMark, Wordmark } from '../components/Logo'
+import { MonlyceeLoginForm } from '../components/MonlyceeLoginForm'
 
 type ServerStatus = { kind: 'ok' | 'error'; text: string } | null
 
@@ -174,65 +175,55 @@ Merci d’avance.`
 
         <div className="auth-heading">
           <Badge tone="accent">
-            <ShieldCheck size={13} /> Connexion officielle
+            <ShieldCheck size={13} /> Connexion élève
           </Badge>
-          <h1>Choisis ton fournisseur d’identité.</h1>
+          <h1>Connecte ton compte élève.</h1>
           <p>
-            Pr8note peut ouvrir le portail officiel de ton établissement. Pour revenir avec ta session,
-            la connexion OIDC doit être autorisée par ton ENT — ton mot de passe ne transite jamais par
-            l’application.
+            Sans administrateur : ton identifiant MonLycée.net suffit pour ouvrir une session réelle.
+            La connexion officielle OIDC reste disponible si ton ENT autorise Pr8note.
           </p>
         </div>
 
-        {!oidcReady && (
-          <div className="auth-gate">
-            <Info size={18} />
-            <div>
-              <strong>Le retour vers Pr8note n’est pas encore activé.</strong>
-              <p>
-                MonLycée.net doit autoriser Pr8note comme client OIDC public. Sans cela, le portail
-                s’ouvre mais ne peut pas renvoyer ta session. La configuration se fait ci-dessous.
-              </p>
-            </div>
-            <button type="button" className="btn btn-primary btn-sm" onClick={focusSetup}>
-              Configurer <ArrowRight size={14} />
-            </button>
-          </div>
-        )}
+        <section className="auth-student-card" aria-label="Connexion avec un compte élève MonLycée">
+          <MonlyceeLoginForm showProviderLink={false} />
+        </section>
 
         <div className="auth-provider-grid">
-          <article className="auth-provider-card auth-provider-featured">
+          <article className="auth-provider-card">
             <div className="auth-provider-top">
               <span className="auth-provider-logo" style={{ background: `${monlycee.accent}22`, color: monlycee.accent }}>
                 {monlycee.monogram}
               </span>
               <div className="auth-provider-title">
-                <h2>{monlycee.name}</h2>
-                <p>{monlycee.subtitle}</p>
+                <h2>Connexion officielle OIDC</h2>
+                <p>{monlycee.name} · Île-de-France</p>
               </div>
-              <Badge tone="accent">{monlycee.badge}</Badge>
+              <Badge tone="neutral">Optionnel</Badge>
             </div>
-            <p className="auth-provider-desc">{monlycee.description}</p>
+            <p className="auth-provider-desc">
+              La connexion officielle du portail, sans saisie de mot de passe dans Pr8note. Elle
+              nécessite un client OIDC public autorisé par ton ENT.
+            </p>
             <div className="auth-tags">
-              <span>PRONOTE</span>
-              <span>ENT</span>
               <span>OIDC</span>
+              <span>Sans mot de passe</span>
+              <span>Retour automatique</span>
             </div>
             <div className="auth-provider-actions">
               {oidcReady ? (
                 <button
                   type="button"
-                  className="btn btn-primary btn-block btn-lg"
+                  className="btn btn-outline btn-block"
                   onClick={handleOidc}
                   disabled={starting}
                 >
                   {starting ? <Loader2 size={17} className="spin" /> : <LockKeyhole size={17} />}
-                  {starting ? 'Ouverture du portail…' : `Se connecter avec ${monlycee.name}`}
+                  {starting ? 'Ouverture du portail…' : 'Se connecter avec OIDC'}
                 </button>
               ) : (
-                <button type="button" className="btn btn-primary btn-block btn-lg" onClick={focusSetup}>
+                <button type="button" className="btn btn-outline btn-block" onClick={focusSetup}>
                   <KeyRound size={17} />
-                  Configurer la connexion
+                  Configurer OIDC
                 </button>
               )}
               <a className="btn btn-ghost btn-block btn-sm" href={MONLYCEE_LOGIN_URL}>
@@ -242,18 +233,18 @@ Merci d’avance.`
             <div className={`auth-provider-status ${oidcReady ? 'ok' : 'warn'}`}>
               {oidcReady ? (
                 <>
-                  <CheckCircle2 size={14} /> Connexion OIDC configurée — la session revient dans Pr8note
+                  <CheckCircle2 size={14} /> OIDC configuré — la session revient dans Pr8note
                 </>
               ) : (
                 <>
-                  <KeyRound size={14} /> Retour automatique inactif — client OIDC à configurer
+                  <KeyRound size={14} /> OIDC non configuré — la connexion élève ci-dessus fonctionne
+                  sans administrateur
                 </>
               )}
             </div>
             <p className="auth-provider-hint">
-              Le lien officiel ouvre <strong>psn.monlycee.net</strong> dans cet onglet. Utilise-le
-              seulement si tu acceptes de revenir manuellement : aucune session ne sera transmise à
-              Pr8note.
+              La connexion OIDC est optionnelle. Le lien ci-dessous ouvre <strong>psn.monlycee.net</strong>{' '}
+              sans retour automatique.
             </p>
           </article>
 
@@ -407,8 +398,9 @@ Merci d’avance.`
                 <li>Colle le client ID reçu ici, puis teste la connexion.</li>
               </ol>
               <p>
-                Sans ce client, Pr8note ne peut pas récupérer ta session. Le portail reste accessible
-                via le lien secondaire, mais aucune authentification ne reviendra dans l’application.
+                Sans ce client, la connexion OIDC n’est pas disponible. La connexion élève par mot de
+                passe ci-dessus reste utilisable, sans administrateur, et le portail reste accessible
+                via le lien secondaire.
               </p>
               <button
                 type="button"
@@ -430,9 +422,10 @@ Merci d’avance.`
         <div className="auth-note">
           <Info size={17} />
           <p>
-            Pr8note est un client indépendant, sans affiliation avec Index Éducation. La connexion
-            authentifie ton identité ; les notes, devoirs et emploi du temps restent des données de
-            démonstration tant qu’un connecteur PRONOTE autorisé n’est pas installé.
+            Pr8note est un client indépendant, sans affiliation avec Index Éducation ni MonLycée.net.
+            La connexion élève ouvre une session MonLycée ; les notes, devoirs et emploi du temps
+            restent des données de démonstration tant qu’un connecteur PRONOTE autorisé n’est pas
+            installé.
           </p>
         </div>
 
@@ -457,7 +450,7 @@ Merci d’avance.`
 
       <footer className="auth-page-foot">
         <span>Pr8note · client scolaire indépendant</span>
-        <span>Aucun mot de passe stocké par l’application</span>
+        <span>Mot de passe non stocké · session locale</span>
       </footer>
     </div>
   )

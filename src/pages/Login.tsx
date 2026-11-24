@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent } from 'react'
+import { useRef, type ChangeEvent } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
@@ -8,9 +8,6 @@ import {
   ExternalLink,
   GraduationCap,
   Info,
-  KeyRound,
-  Loader2,
-  LockKeyhole,
   ShieldCheck,
   Sparkles,
   TrendingUp,
@@ -20,22 +17,12 @@ import { STUDENT } from '../data/seed'
 import { useStore } from '../lib/store'
 import { Badge } from '../components/ui'
 import { LogoMark, Wordmark } from '../components/Logo'
-import {
-  EDUC_CONNECT_LOGIN_URL,
-  MONLYCEE_LOGIN_URL,
-  authErrorMessage,
-  beginOidcLogin,
-  isWebAuthAvailable,
-  loadOidcConfig,
-} from '../lib/auth'
+import { MonlyceeLoginForm } from '../components/MonlyceeLoginForm'
+import { EDUC_CONNECT_LOGIN_URL } from '../lib/auth'
 
 export function Login() {
   const { signIn, importData, toast } = useStore()
-  const [starting, setStarting] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
-  const oidcConfigured = Boolean(loadOidcConfig())
-  const webAuth = isWebAuthAvailable()
-  const oidcReady = oidcConfigured && webAuth
 
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -46,17 +33,6 @@ export function Login() {
       toast(error instanceof Error ? error.message : 'Import impossible.', 'error')
     } finally {
       event.target.value = ''
-    }
-  }
-
-  const handleOidc = async () => {
-    if (starting) return
-    setStarting(true)
-    try {
-      await beginOidcLogin()
-    } catch (error) {
-      toast(authErrorMessage(error), 'error')
-      setStarting(false)
     }
   }
 
@@ -167,43 +143,12 @@ export function Login() {
 
           <h2>Bienvenue dans Pr8note.</h2>
           <p className="login-sub">
-            Connecte-toi avec ton établissement pour retrouver ton espace. Pr8note ne voit jamais ton mot
-            de passe.
+            Connecte-toi avec ton compte élève MonLycée.net. Ton mot de passe sert uniquement à ouvrir
+            ta session, puis il est oublié.
           </p>
 
-          <div className="login-provider">
-            <div className="login-provider-top">
-              <span className="login-provider-mark">ML</span>
-              <div className="login-provider-copy">
-                <strong>MonLycée.net</strong>
-                <span>Portail officiel · Île-de-France</span>
-              </div>
-              <Badge tone="accent">Principal</Badge>
-            </div>
-
-            {oidcReady ? (
-              <button
-                type="button"
-                className="btn btn-primary btn-block btn-lg"
-                onClick={handleOidc}
-                disabled={starting}
-              >
-                {starting ? <Loader2 size={17} className="spin" /> : <LockKeyhole size={17} />}
-                {starting ? 'Ouverture du portail…' : 'Continuer avec MonLycée.net'}
-              </button>
-            ) : (
-              <Link className="btn btn-primary btn-block btn-lg" to="/connexion">
-                <KeyRound size={17} />
-                Configurer la connexion MonLycée
-              </Link>
-            )}
-
-            <p className="login-provider-destination">
-              <ExternalLink size={11} />
-              {oidcReady
-                ? 'Connexion sécurisée via le portail MonLycée.net'
-                : 'Le portail s’ouvre sans retour automatique'}
-            </p>
+          <div className="login-provider login-student-provider">
+            <MonlyceeLoginForm compact showProviderLink={false} />
           </div>
 
           <div className="login-provider-alt">
@@ -215,32 +160,13 @@ export function Login() {
             </Link>
           </div>
 
-          {oidcConfigured && !webAuth ? (
-            <div className="login-auth-note">
-              <Info size={15} />
-              <p>
-                La connexion OIDC active est disponible dans la version web. Depuis l’app macOS, le
-                portail s’ouvre dans ton navigateur.{' '}
-                <a href={MONLYCEE_LOGIN_URL}>Ouvrir le portail</a>
-              </p>
-            </div>
-          ) : oidcReady ? (
-            <div className="login-auth-note ok">
-              <ShieldCheck size={15} />
-              <p>Connexion OIDC active : ton identité sera vérifiée par MonLycée.net.</p>
-            </div>
-          ) : (
-            <div className="login-auth-note">
-              <Info size={15} />
-              <p>
-                MonLycée.net ne peut pas encore renvoyer ta session : un client OIDC doit être autorisé
-                par ton ENT.{' '}
-                <Link to="/connexion">Configurer</Link>
-                {' · '}
-                <a href={MONLYCEE_LOGIN_URL}>Ouvrir le portail sans retour</a>
-              </p>
-            </div>
-          )}
+          <div className="login-auth-note">
+            <Info size={15} />
+            <p>
+              Pas besoin d’administrateur : cette connexion utilise ton compte élève. La connexion
+              officielle OIDC reste disponible dans <Link to="/connexion">les autres options</Link>.
+            </p>
+          </div>
 
           <div className="login-divider">
             <span>ou explorer</span>
@@ -265,7 +191,7 @@ export function Login() {
 
           <div className="login-meta">
             <span>
-              <ShieldCheck size={14} /> Aucun mot de passe stocké par Pr8note
+              <ShieldCheck size={14} /> Mot de passe jamais stocké
             </span>
             <span>
               <GraduationCap size={14} /> Notes et planning de démonstration
@@ -273,7 +199,8 @@ export function Login() {
           </div>
 
           <p className="login-fineprint">
-            Pr8note est un client indépendant, sans affiliation avec Index Éducation ni PRONOTE.
+            Pr8note est un client indépendant, sans affiliation avec Index Éducation, PRONOTE ni
+            MonLycée.net.
           </p>
         </div>
       </section>

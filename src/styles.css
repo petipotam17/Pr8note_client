@@ -6183,6 +6183,248 @@ html[data-motion="off"] *::after {
   color: var(--good);
 }
 
+/* Connexion élève MonLycée */
+
+.auth-student-card {
+  width: min(780px, 100%);
+  margin: 0 auto 16px;
+  padding: 22px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: var(--radius);
+  background:
+    linear-gradient(155deg, color-mix(in srgb, var(--accent) 8%, var(--panel)), var(--panel) 58%),
+    var(--panel);
+  box-shadow: var(--shadow-card);
+}
+
+.auth-student-form {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  min-width: 0;
+}
+
+.auth-student-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.auth-student-head .auth-provider-title h2 {
+  font-size: 18px;
+}
+
+.auth-student-lock {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 8%, transparent);
+  flex-shrink: 0;
+}
+
+.auth-student-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+  margin-top: 2px;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.auth-field > label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.065em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.auth-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 44px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--muted-2);
+  transition:
+    border-color var(--transition),
+    background var(--transition);
+}
+
+.auth-input-wrap:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border-strong));
+  background: color-mix(in srgb, var(--panel-2) 72%, var(--panel));
+}
+
+.auth-input-wrap > svg {
+  flex-shrink: 0;
+  color: var(--muted-2);
+}
+
+.auth-input-wrap input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 7px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.auth-input-wrap input::placeholder {
+  color: var(--muted-2);
+}
+
+.auth-input-wrap input:disabled {
+  opacity: 0.65;
+}
+
+.auth-password-toggle {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted-2);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.auth-password-toggle:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+}
+
+.auth-form-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--bad) 30%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+  color: color-mix(in srgb, var(--bad) 82%, var(--text));
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.auth-form-error svg {
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.auth-form-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted-2);
+}
+
+.auth-form-notice svg {
+  margin-top: 1px;
+  color: var(--good);
+  flex-shrink: 0;
+}
+
+.auth-form-notice strong {
+  color: var(--muted);
+  font-weight: 550;
+}
+
+.auth-form-help {
+  padding-top: 2px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--muted-2);
+}
+
+.auth-form-help summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-top: 1px;
+  cursor: pointer;
+  color: var(--muted-2);
+  list-style: none;
+}
+
+.auth-form-help summary::-webkit-details-marker {
+  display: none;
+}
+
+.auth-form-help summary:hover {
+  color: var(--text);
+}
+
+.auth-form-help p {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.auth-form-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px 12px;
+  padding-top: 1px;
+}
+
+.auth-form-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 550;
+  color: var(--accent-2);
+}
+
+.auth-form-link:hover {
+  text-decoration: underline;
+}
+
+.auth-student-form.compact {
+  gap: 9px;
+}
+
+.auth-student-form.compact .auth-student-head {
+  margin-bottom: 1px;
+}
+
+.auth-student-form.compact .auth-student-head .auth-provider-title h2 {
+  font-size: 16px;
+}
+
+.auth-student-form.compact .auth-student-fields,
+.login-student-provider .auth-student-fields {
+  grid-template-columns: 1fr;
+}
+
+.login-student-provider {
+  padding: 15px;
+}
+
 /* Full-page provider chooser */
 
 .auth-page {
@@ -7002,8 +7244,21 @@ html[data-motion="off"] *::after {
   }
 
   .auth-provider-card,
-  .auth-config-card {
+  .auth-config-card,
+  .auth-student-card {
     padding: 18px;
+  }
+
+  .auth-student-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-student-head {
+    flex-wrap: wrap;
+  }
+
+  .auth-student-lock {
+    margin-left: 0;
   }
 
   .auth-provider-top {

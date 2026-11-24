@@ -21,7 +21,7 @@
 - **Messagerie** : conversations, messages non lus, favoris, réponses et envoi de messages (conservés localement).
 - **Ressources** : bibliothèque filtrable, favoris et fiches détaillées.
 - **Recherche universelle ⌘K** : pages, actions, devoirs, messages, matières et ressources.
-- **Connexion multi-fournisseurs** : redirection réelle vers MonLycée.net, ÉduConnect ou l’ENT de ton établissement, avec flux OIDC + PKCE lorsque l’ENT autorise un client public.
+- **Connexion multi-fournisseurs** : connexion réelle avec un compte élève MonLycée.net (identifiant et mot de passe, sans administrateur), redirection vers ÉduConnect ou l’ENT de ton établissement, et flux OIDC + PKCE lorsque l’ENT autorise un client public.
 - **Personnalisation** : thème sombre/clair, cinq accents, densité compacte, réduction des animations.
 - **Données locales** : export / import JSON, réinitialisation de la démo.
 - **PWA** : installation sur l'écran d'accueil et cache hors ligne.
@@ -82,6 +82,7 @@ macos/
   IconGen.swift   génération de l'icône 1024 px
 scripts/
   build-macos-app.sh
+worker/           serveur de connexion MonLycée (Cloudflare Worker / Sites)
 public/           favicon, manifest PWA, service worker
 ```
 
@@ -89,15 +90,16 @@ public/           favicon, manifest PWA, service worker
 
 L’écran **Connexion** propose :
 
-- **MonLycée.net** — redirection vers le portail officiel `psn.monlycee.net`. Un flux **OpenID Connect Authorization Code + PKCE** est intégré (découverte, échange de code, vérification du jeton d’identité via JWKS, nonce et state). Il s’active lorsqu’un **client OIDC public** est créé par l’administrateur de l’ENT avec l’URL de redirection affichée dans Pr8note. Aucun secret client n’est stocké dans le navigateur.
+- **MonLycée.net (compte élève)** — le formulaire principal demande l’identifiant et le mot de passe MonLycée. La connexion est réalisée par le serveur Pr8note (`worker/`, déployé sur Freebuff Sites) qui ouvre la session officielle du portail, lit l’identité et **ne stocke ni ne journalise le mot de passe**. Aucun administrateur ENT n’est nécessaire. Les cookies du portail sont conservés uniquement en mémoire pendant la requête. Si MonLycée demande un CAPTCHA, une validation en deux étapes ou une autorisation supplémentaire, Pr8note s’arrête et propose le portail officiel au lieu de contourner la protection.
+- **MonLycée.net (OIDC)** — la connexion officielle sans mot de passe, disponible lorsqu’un **client OIDC public** est créé par l’administrateur de l’ENT avec l’URL de redirection affichée dans Pr8note. Le flux Authorization Code + PKCE vérifie le jeton via JWKS, le nonce et le state. Aucun secret client n’est stocké dans le navigateur.
 - **ÉduConnect** — redirection vers le portail national.
 - **Un autre ENT / PRONOTE** — saisie de l’adresse de l’établissement, puis redirection officielle.
 
-Sans client OIDC autorisé, le bouton principal ouvre la configuration Pr8note au lieu de faire un aller sans retour. Le portail reste accessible par un lien secondaire explicite, mais aucune session ne revient dans l’application. La configuration se fait dans **Connexion → OIDC · MonLycée.net** ; le client ID reste sur l’appareil.
+La connexion par mot de passe est une solution de repli indépendante, sans affiliation avec MonLycée.net. Elle ne doit être utilisée qu’avec ton propre compte. Le serveur de connexion est public : son code se trouve dans `worker/index.js`.
 
 ## 🔐 À propos des données
 
-Pr8note fonctionne avec un **espace de démonstration complet** : données fictives, aucune synchronisation PRONOTE. La connexion OIDC vérifie l’identité, mais PRONOTE reste un logiciel propriétaire d’Index Éducation ; toute récupération réelle de notes ou d’emploi du temps nécessitera l’autorisation et le connecteur de l’établissement.
+Pr8note fonctionne avec un **espace de démonstration complet** : données fictives, aucune synchronisation PRONOTE. La connexion élève ouvre une session MonLycée et vérifie l’identité, mais PRONOTE reste un logiciel propriétaire d’Index Éducation ; toute récupération réelle de notes ou d’emploi du temps nécessitera l’autorisation et le connecteur de l’établissement.
 
 Les devoirs cochés, messages lus, réponses, favoris et réglages sont stockés dans le navigateur (localStorage). L’export JSON permet de les sauvegarder et de les réimporter.
 

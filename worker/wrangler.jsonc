@@ -1,0 +1,6 @@
+{
+  // Configuration locale uniquement : le déploiement passe par Sites.
+  "name": "pr8note-auth",
+  "main": "index.js",
+  "compatibility_date": "2025-10-01"
+}

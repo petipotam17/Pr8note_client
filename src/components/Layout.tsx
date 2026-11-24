@@ -45,6 +45,7 @@ export function Layout() {
   const [accountOpen, setAccountOpen] = useState(false)
 
   const student = state.session!
+  const verifiedConnection = student.authMethod === 'oidc' || student.authMethod === 'password'
   const unreadMessages = THREADS.filter((thread) => !state.readThreads.includes(thread.id)).length
 
   useEffect(() => {
@@ -341,7 +342,7 @@ export function Layout() {
                       </button>
                     </div>
                     <p className="account-foot">
-                      {student.authMethod === 'oidc'
+                      {verifiedConnection
                         ? `Connecté via ${student.authLabel ?? 'ton fournisseur'}`
                         : 'Pr8note · espace de démonstration'}
                     </p>
@@ -353,12 +354,14 @@ export function Layout() {
         </header>
 
         <main className="content">
-          {student.authMethod === 'oidc' && (
+          {verifiedConnection && (
             <div className="demo-banner">
               <ShieldCheck size={15} />
               <span>
-                <strong>{student.authLabel ?? 'Connexion vérifiée'}.</strong> Ton identité est vérifiée ;
-                les notes, devoirs et l’emploi du temps restent des données de démonstration.
+                <strong>{student.authLabel ?? 'Connexion vérifiée'}.</strong>{' '}
+                {student.authMethod === 'password'
+                  ? 'Ta session est ouverte ; les notes, devoirs et l’emploi du temps restent des données de démonstration.'
+                  : 'Ton identité est vérifiée ; les notes, devoirs et l’emploi du temps restent des données de démonstration.'}
               </span>
               <Link to="/connexion">Gérer</Link>
             </div>

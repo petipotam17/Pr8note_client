@@ -19,7 +19,7 @@ export interface Student {
   establishment: string
   city: string
   email: string
-  authMethod?: 'demo' | 'oidc'
+  authMethod?: 'demo' | 'oidc' | 'password'
   authLabel?: string
   subject?: string
 }

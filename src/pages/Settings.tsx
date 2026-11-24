@@ -27,6 +27,7 @@ import { LogoMark, Wordmark } from '../components/Logo'
 export function Settings() {
   const { state, updateSettings, exportData, importData, resetDemo, signOut, toast } = useStore()
   const student = state.session!
+  const verifiedConnection = student.authMethod === 'oidc' || student.authMethod === 'password'
   const fileInput = useRef<HTMLInputElement>(null)
   const [confirmReset, setConfirmReset] = useState(false)
 
@@ -64,9 +65,9 @@ export function Settings() {
               </h2>
               <div className="profile-badges">
                 <Badge tone="accent">{student.className}</Badge>
-                {student.authMethod === 'oidc' ? (
+                {verifiedConnection ? (
                   <Badge tone="good">
-                    <ShieldCheck size={11} /> {student.authLabel ?? 'Connexion OIDC'}
+                    <ShieldCheck size={11} /> {student.authLabel ?? 'Connexion vérifiée'}
                   </Badge>
                 ) : (
                   <Badge tone="neutral">
@@ -105,7 +106,9 @@ export function Settings() {
               <strong>
                 {student.authMethod === 'oidc'
                   ? `${student.authLabel ?? 'OIDC'} · identité vérifiée`
-                  : 'Démonstration locale'}
+                  : student.authMethod === 'password'
+                    ? `${student.authLabel ?? 'MonLycée.net'} · session ouverte`
+                    : 'Démonstration locale'}
               </strong>
             </div>
           </div>
