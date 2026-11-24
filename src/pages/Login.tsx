@@ -144,7 +144,7 @@ export function Login() {
           <h2>Bienvenue dans Pr8note.</h2>
           <p className="login-sub">
             Connecte-toi avec ton compte élève MonLycée.net. Ton mot de passe sert uniquement à ouvrir
-            ta session, puis il est oublié.
+            ta session. Il n’est pas stocké.
           </p>
 
           <div className="login-provider login-student-provider">
