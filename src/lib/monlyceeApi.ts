@@ -102,12 +102,14 @@ export async function signInWithMonlyceePassword(
         payload?.message ||
           (response.status === 429
             ? 'Trop de tentatives. Attends quelques minutes avant de réessayer.'
-            : 'La connexion MonLycée n’a pas abouti. Réessaie dans quelques instants.'),
+            : 'La connexion MonLycée n’a pas abouti. Réessaie dans quelques instants. · code C3'),
       )
     }
 
     if (!payload || !isStudent(payload.student)) {
-      throw new Error('Le serveur de connexion a renvoyé une réponse incomplète.')
+      throw new Error(
+        'Le serveur de connexion a renvoyé une réponse incomplète. · code C4',
+      )
     }
 
     const school = isSchool(payload.school) ? payload.school : null
@@ -134,12 +136,12 @@ export async function signInWithMonlyceePassword(
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error(
-        'La synchronisation PRONOTE met trop de temps à répondre. Réessaie dans quelques instants.',
+        'La synchronisation PRONOTE met trop de temps à répondre. Réessaie dans quelques instants. · code C2',
       )
     }
     if (error instanceof TypeError) {
       throw new Error(
-        'Impossible de joindre le serveur de connexion Pr8note. Vérifie ta connexion internet.',
+        'Impossible de joindre le serveur de connexion Pr8note. Vérifie ta connexion internet. · code C1',
       )
     }
     throw error

@@ -657,18 +657,26 @@ const SCHOOL_ATTEMPTS_BUDGET_MS = 30_000
  * court (E1…E9, W1…W6), sans hôte, identifiant ni détail technique. Le nombre
  * d'adresses essayées dit si la découverte automatique a trouvé quelque chose.
  *
+ * Une erreur inattendue (non reconnue comme une erreur PRONOTE) reçoit
+ * elle aussi un code, E0 : sans lui, l'élève voyait un message générique
+ * impossible à diagnostiquer.
+ *
  * @param {unknown} error
  * @param {number} [attempts]
  */
-function schoolFailure(error, attempts = 0) {
+export function schoolFailure(error, attempts = 0) {
   const suffix = attempts > 1 ? ` · ${attempts} adresses essayées` : ''
+  if (error instanceof PronoteError) {
+    return {
+      code: error.code,
+      stage: error.stage || null,
+      message: `${describePronoteError(error)}${suffix}`,
+    }
+  }
   return {
-    code: error instanceof PronoteError ? error.code : 'PRONOTE_UNAVAILABLE',
-    stage: error instanceof PronoteError ? error.stage || null : null,
-    message:
-      error instanceof PronoteError
-        ? `${describePronoteError(error)}${suffix}`
-        : `PRONOTE n’a pas pu être synchronisé. Réessaie dans quelques instants.${suffix}`,
+    code: 'PRONOTE_UNAVAILABLE',
+    stage: 'E0',
+    message: `PRONOTE n’a pas pu être synchronisé. Réessaie dans quelques instants. · code E0${suffix}`,
   }
 }
 

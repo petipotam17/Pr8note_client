@@ -75,6 +75,7 @@ export function describePronoteError(error) {
  * Codes d'étape renvoyés avec l'erreur. Ils sont courts et ne contiennent ni
  * hôte, ni identifiant, ni adresse IP, ni détail de configuration :
  *
+ *   E0 erreur interne inattendue (aucune étape PRONOTE reconnue)
  *   E1 adresse fournie invalide
  *   E2 redirection hors ENT/PRONOTE
  *   E3-N hôte PRONOTE injoignable (DNS, TLS, connexion refusée)

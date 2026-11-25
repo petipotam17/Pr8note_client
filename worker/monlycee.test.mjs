@@ -6,6 +6,7 @@ import {
   loginToMonlycee,
   parseIdentityPayload,
   parseLoginForm,
+  schoolFailure,
 } from './index.js'
 
 const START = 'https://psn.monlycee.net/oauth2/start?rd=https%3A%2F%2Fpsn.monlycee.net%2F'
@@ -166,6 +167,15 @@ test('l’identité accepte une charge utile imbriquée', () => {
   assert.equal(student.lastName, 'Benali')
   assert.equal(student.className, 'Première 2')
   assert.equal(student.establishment, 'Lycée Jean Moulin')
+})
+
+test('un échec inattendu porte aussi un code d’étape', () => {
+  const failure = schoolFailure(new TypeError('boom at 10.0.0.1'), 2)
+  assert.equal(failure.stage, 'E0')
+  assert.match(failure.message, /· code E0/)
+  assert.match(failure.message, /2 adresses essayées/)
+  // Le détail technique ne doit jamais parvenir à l'élève.
+  assert.doesNotMatch(failure.message, /boom|10\.0\.0\.1/)
 })
 
 test('un échec réseau sur la première adresse essaie la suivante', async () => {
