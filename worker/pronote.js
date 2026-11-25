@@ -16,6 +16,12 @@ const PRONOTE_SYNC_BUDGET_MS = 60_000
 const PRONOTE_MAX_REDIRECTS = 8
 const PRONOTE_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+const HTML_HEADERS = {
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'fr-FR,fr;q=0.9',
+  'User-Agent': PRONOTE_USER_AGENT,
+}
+const MAX_ENTRY_HOPS = 3
 
 const MAX_MESSAGES = 6
 const MAX_MESSAGES_PER_THREAD = 12
@@ -428,15 +434,42 @@ export async function discoverPronoteUrl(jar, fetchImpl = fetch) {
  * @param {string} html
  */
 export function parseStartAttributes(html) {
-  const match = html.match(/Start\s*\(\s*\{([^}]*)\}\s*\)/)
-  if (!match) return null
+  const marker = /Start\s*\(\s*\{/.exec(html)
+  if (!marker) return null
+
+  // Les valeurs peuvent contenir des accolades (mot de passe, libellés) : on
+  // équilibre les accolades en ignorant celles des chaînes au lieu de
+  // s'arrêter à la première fermante.
+  const start = marker.index + marker[0].length - 1
+  let depth = 0
+  let quote = ''
+  let end = -1
+  for (let index = start; index < html.length; index += 1) {
+    const character = html[index]
+    if (quote) {
+      if (character === '\\') index += 1
+      else if (character === quote) quote = ''
+      continue
+    }
+    if (character === "'" || character === '"') quote = character
+    else if (character === '{') depth += 1
+    else if (character === '}') {
+      depth -= 1
+      if (depth === 0) {
+        end = index
+        break
+      }
+    }
+  }
+  if (end === -1) return null
+
   const attributes = {}
-  const pattern = /([A-Za-z0-9_]+)\s*:\s*(?:'([^']*)'|"([^"]*)"|([^,}]+))/g
+  const pattern =
+    /(['"]?)([A-Za-z0-9_]+)\1\s*:\s*(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"|([^,}]+))/g
   let entry
-  while ((entry = pattern.exec(match[1]))) {
-    const key = entry[1]
-    const value = entry[2] ?? entry[3] ?? entry[4] ?? ''
-    attributes[key] = value.trim()
+  while ((entry = pattern.exec(html.slice(start + 1, end)))) {
+    const value = entry[3] ?? entry[4] ?? entry[5] ?? ''
+    attributes[entry[2]] = value.trim()
   }
   return attributes.h ? attributes : null
 }
@@ -636,6 +669,107 @@ class PronoteSession {
 }
 
 /**
+ * Page suivante indiquée par la page elle-même. Les ENT et PRONOTE redirigent
+ * souvent en JavaScript (meta refresh, location, iframe), ce que fetch ne suit
+ * pas.
+ *
+ * @param {string} html
+ * @param {string} baseUrl
+ */
+function clientRedirect(html, baseUrl) {
+  const patterns = [
+    /<meta[^>]+http-equiv=["']?refresh["']?[^>]*content=["'][^"']*url=([^"';]+)/i,
+    /(?:window\.|top\.)?location\.(?:replace|assign)\s*\(\s*["']([^"']+)["']/i,
+    /(?:window\.|top\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']/i,
+    /<iframe[^>]+src=["']([^"']+)["']/i,
+  ]
+  for (const pattern of patterns) {
+    const match = pattern.exec(html)
+    if (!match) continue
+    try {
+      return new URL(match[1].trim(), baseUrl).toString()
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+/**
+ * Formulaire d'authentification unique renvoyé par l'ENT pour revenir à
+ * PRONOTE. On n'accepte qu'un POST de champs cachés : un formulaire de
+ * connexion (mot de passe, identifiant) n'est jamais soumis.
+ *
+ * @param {string} html
+ */
+function ssoForm(html) {
+  const markup = /<form\b[^>]*>[\s\S]*?<\/form>/i.exec(html)
+  if (!markup) return null
+  const open = /<form\b[^>]*>/i.exec(markup[0])?.[0] ?? ''
+  if ((/method=["']?([a-z]+)/i.exec(open)?.[1] ?? 'get').toLowerCase() !== 'post') return null
+
+  const fields = new URLSearchParams()
+  for (const input of markup[0].match(/<input\b[^>]*>/gi) ?? []) {
+    const name = /name=["']([^"']+)["']/i.exec(input)?.[1]
+    if (!name) continue
+    if ((/type=["']([^"']+)["']/i.exec(input)?.[1] ?? 'text').toLowerCase() !== 'hidden') continue
+    if (/pass|user|login|identifiant|email|courriel/i.test(name)) return null
+    fields.set(name, /value=["']([^"']*)["']/i.exec(input)?.[1] ?? '')
+  }
+  if (!fields.toString()) return null
+  return { action: /action=["']([^"']*)["']/i.exec(open)?.[1] ?? '', fields }
+}
+
+/**
+ * Ouvre la page d'entrée de l'Espace élève, en suivant les redirections côté
+ * client et le formulaire SSO que l'ENT renvoie avant d'atteindre PRONOTE.
+ *
+ * @param {string} url
+ * @param {{ headerFor(url: string): string; absorb(response: Response, url: string): void }} jar
+ * @param {{ fetchImpl?: typeof fetch; allowedHosts: Set<string> }} options
+ */
+async function readEntryPage(url, jar, options) {
+  let current = url
+  let method = 'GET'
+  let body
+  let page = null
+
+  for (let hop = 0; hop <= MAX_ENTRY_HOPS; hop += 1) {
+    const { response, finalUrl } = await fetchWithJar(
+      current,
+      {
+        method,
+        body,
+        headers:
+          method === 'POST'
+            ? { ...HTML_HEADERS, 'Content-Type': 'application/x-www-form-urlencoded' }
+            : HTML_HEADERS,
+      },
+      jar,
+      options,
+    )
+    const html = await response.text()
+    page = { response, finalUrl, html, attributes: parseStartAttributes(html) }
+    if (page.attributes || !response.ok) return page
+
+    const form = ssoForm(html)
+    const next = form ? null : clientRedirect(html, finalUrl)
+    if (!form && !next) return page
+
+    if (form) {
+      method = 'POST'
+      body = form.fields.toString()
+      current = new URL(form.action || finalUrl, finalUrl).toString()
+    } else {
+      method = 'GET'
+      body = undefined
+      current = next
+    }
+  }
+  return page
+}
+
+/**
  * @param {object} config
  * @param {string} config.url
  * @param {{ headerFor(url: string): string; absorb(response: Response, url: string): void; allowHost?(host: string): void }} config.jar
@@ -649,34 +783,67 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch }) {
   if (typeof jar.allowHost === 'function') jar.allowHost(host)
   const allowedHosts = new Set([host])
 
-  const { response, finalUrl } = await fetchWithJar(
+  // L'adresse stockée peut être approximative : on essaie les points d'entrée
+  // habituels de l'Espace élève avant de conclure à une page inhabituelle.
+  const directory = normalized.replace(/[^/]*$/, '')
+  const candidates = [
     normalized,
-    {
-      method: 'GET',
-      headers: {
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'fr-FR,fr;q=0.9',
-        'User-Agent': PRONOTE_USER_AGENT,
-      },
-    },
-    jar,
-    { fetchImpl, allowedHosts },
-  )
+    `${directory}eleve.html`,
+    `${directory}eleve.html?login=true`,
+    directory,
+  ].filter((value, index, all) => all.indexOf(value) === index)
 
-  if (!response.ok) {
+  let page = null
+  let score = -1
+  for (const candidate of candidates) {
+    let current
+    try {
+      current = await readEntryPage(candidate, jar, { fetchImpl, allowedHosts })
+    } catch (error) {
+      if (error instanceof PronoteError && error.code === 'PRONOTE_REDIRECT') continue
+      throw error
+    }
+    if (current.attributes) {
+      page = current
+      break
+    }
+
+    const currentScore = /mot de passe|identifiant|connexion/i.test(current.html)
+      ? 2
+      : current.response.ok
+        ? 1
+        : 0
+    if (currentScore > score) {
+      page = current
+      score = currentScore
+    }
+    // Un refus ou la page de connexion PRONOTE ne s'amélioreront pas avec une
+    // autre adresse : on garde la cause la plus précise.
+    if (!current.response.ok || currentScore === 2) break
+  }
+
+  if (!page) {
+    throw new PronoteError(
+      'PRONOTE_REDIRECT',
+      'PRONOTE a interrompu la connexion (trop de redirections).',
+    )
+  }
+  if (!page.response.ok) {
     throw new PronoteError('PRONOTE_ACCESS', 'PRONOTE n’a pas accepté la session MonLycée.')
   }
 
-  const html = await response.text()
-  const attributes = parseStartAttributes(html)
+  const attributes = page.attributes
   if (!attributes) {
-    if (/mot de passe|identifiant|connexion/i.test(html) && !/Start/i.test(html)) {
+    if (/mot de passe|identifiant|connexion/i.test(page.html)) {
       throw new PronoteError(
         'PRONOTE_ACCESS',
         'PRONOTE demande une connexion séparée. Vérifie que l’accès PRONOTE est bien ouvert depuis ton ENT.',
       )
     }
-    throw new PronoteError('PRONOTE_PAGE', 'La page PRONOTE est inhabituelle. Réessaie plus tard.')
+    throw new PronoteError(
+      'PRONOTE_PAGE',
+      'L’adresse PRONOTE ne mène pas à l’Espace élève. Vérifie l’adresse de ton lycée (elle finit par /pronote/eleve.html) puis réessaie.',
+    )
   }
   if (!attributes.e || !attributes.f) {
     throw new PronoteError(
@@ -685,10 +852,10 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch }) {
     )
   }
 
-  const root = finalUrl.replace(/\/[^/]*$/, '')
+  const root = page.finalUrl.replace(/\/[^/]*$/, '')
   // Sans numéro de version dans la page, la présence des indicateurs CrA/CoA
   // signale une version récente (format id/dataSec).
-  const version = parseVersion(html) ?? (attributes.CrA !== undefined ? [2025, 1, 3] : null)
+  const version = parseVersion(page.html) ?? (attributes.CrA !== undefined ? [2025, 1, 3] : null)
   const session = new PronoteSession({
     root,
     attributes,

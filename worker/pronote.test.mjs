@@ -286,6 +286,11 @@ function createFakePronote(options = {}) {
     },
   }
 
+  const startPage = `<!doctype html><html><body onload="try { Start ({h:'4242',CrA:true,CoA:true,a:6,e:'eleve.demo',f:'secret-ent'}) } catch (e) { messageErreur (e) }">
+        <span>PRONOTE 2025.2.0</span></body></html>`
+  const htmlPage = (body, status = 200) =>
+    new Response(body, { status, headers: { 'Content-Type': 'text/html' } })
+
   const fetchImpl = async (input, init = {}) => {
     const url = new URL(input)
     if (url.pathname.endsWith('eleve.html')) {
@@ -293,16 +298,39 @@ function createFakePronote(options = {}) {
         return new Response('Accès refusé', { status: 403 })
       }
       if (options.access === 'login') {
-        return new Response(
+        return htmlPage(
           '<!doctype html><html><body><form><label>Identifiant</label><input type="password"></form></body></html>',
-          { status: 200, headers: { 'Content-Type': 'text/html' } },
         )
       }
-      return new Response(
-        `<!doctype html><html><body onload="try { Start ({h:'4242',CrA:true,CoA:true,a:6,e:'eleve.demo',f:'secret-ent'}) } catch (e) { messageErreur (e) }">
-        <span>PRONOTE 2025.2.0</span></body></html>`,
-        { status: 200, headers: { 'Content-Type': 'text/html' } },
-      )
+      if (options.access === 'page') {
+        return htmlPage(
+          '<!doctype html><html><head><title>PRONOTE</title></head><body>Service momentanément indisponible.</body></html>',
+        )
+      }
+      // Deux entrées d'ENT : redirection JavaScript puis formulaire SSO
+      // auto-posté, avant d'atteindre la page de l'Espace élève.
+      if (options.entry === 'meta' && !url.searchParams.has('step')) {
+        return htmlPage(
+          '<!doctype html><html><head><meta http-equiv="refresh" content="0; url=eleve.html?step=1"></head></html>',
+        )
+      }
+      if (options.entry === 'sso' && !url.searchParams.has('sso')) {
+        return htmlPage(
+          '<!doctype html><html><body><form method="post" action="/pronote/sso"><input type="hidden" name="SAMLResponse" value="jeton-test"></form></body></html>',
+        )
+      }
+      return htmlPage(startPage)
+    }
+
+    if (url.pathname.endsWith('/sso')) {
+      assert.equal(init.method, 'POST')
+      assert.equal(String(init.body), 'SAMLResponse=jeton-test')
+      return htmlPage(startPage)
+    }
+
+    // Autres chemins (racine /pronote/) : page neutre sans bloc Start.
+    if (init.method !== 'POST') {
+      return htmlPage('<!doctype html><html><body>Accueil PRONOTE</body></html>')
     }
 
     assert.equal(init.method, 'POST')
@@ -537,4 +565,52 @@ test('l’ancien format de challenge PRONOTE reste accepté', async () => {
   assert.equal(school.currentPeriodId, 'T2')
   assert.equal(school.generalAverage, 15.5)
   assert.equal(school.grades.length, 3)
+})
+
+test('une page d’entrée avec redirection JavaScript ouvre quand même la session', async () => {
+  const fake = createFakePronote({ entry: 'meta' })
+  const school = await fetchSchoolData({
+    url: 'https://lycee.index-education.net/pronote/eleve.html',
+    jar,
+    fetchImpl: fake.fetchImpl,
+  })
+  assert.equal(school.currentPeriodId, 'T2')
+  assert.equal(school.averages.length, 3)
+})
+
+test('un formulaire SSO auto-posté par l’ENT ramène à PRONOTE', async () => {
+  const fake = createFakePronote({ entry: 'sso' })
+  const school = await fetchSchoolData({
+    url: 'https://lycee.index-education.net/pronote/eleve.html',
+    jar,
+    fetchImpl: fake.fetchImpl,
+  })
+  assert.equal(school.grades.length, 3)
+  assert.equal(school.student.className, 'Première 4')
+})
+
+test('une page sans bloc Start demande de vérifier l’adresse PRONOTE', async () => {
+  const fake = createFakePronote({ access: 'page' })
+  await assert.rejects(
+    () =>
+      fetchSchoolData({
+        url: 'https://lycee.index-education.net/pronote/eleve.html',
+        jar,
+        fetchImpl: fake.fetchImpl,
+      }),
+    (error) =>
+      error instanceof PronoteError &&
+      error.code === 'PRONOTE_PAGE' &&
+      /adresse PRONOTE/i.test(error.message) &&
+      !/index-education|secret-ent/i.test(error.message),
+  )
+})
+
+test('le bloc Start est lu même avec des accolades dans une valeur', () => {
+  const attributes = parseStartAttributes(
+    `<script>window.Start (\n { h: 4242, a: 6, e: 'eleve.demo', f: 'mot}de{passe', CrA: true }\n)</script>`,
+  )
+  assert.equal(attributes?.h, '4242')
+  assert.equal(attributes?.a, '6')
+  assert.equal(attributes?.f, 'mot}de{passe')
 })
