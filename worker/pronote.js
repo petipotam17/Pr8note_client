@@ -79,7 +79,8 @@ export function describePronoteError(error) {
  *   E1 adresse fournie invalide
  *   E2 redirection hors ENT/PRONOTE
  *   E3-D domaine PRONOTE introuvable (aucun serveur à cette adresse)
- *   E3-N hôte PRONOTE injoignable (TLS, connexion refusée)
+ *   E3-E portail MonLycée injoignable (saut ENT)
+ *   E3-P hôte PRONOTE injoignable (TLS, connexion refusée)
  *   E3-T délai dépassé en attendant PRONOTE
  *   E4 trop de redirections
  *   E5 PRONOTE a refusé la session
@@ -391,18 +392,22 @@ async function fetchWithJar(url, init, jar, options) {
     } catch (error) {
       const aborted = error instanceof Error && error.name === 'AbortError'
       const dns = !aborted && isDnsFailure(error)
-      // Trois causes très différentes : un domaine qui n'existe pas (E3-D)
-      // ne se corrige pas en réessayant, un hôte injoignable (E3-N) peut se
-      // débloquer, et un PRONOTE lent (E3-T) demande juste du temps.
+      // Le saut qui échoue compte : le portail MonLycée (E3-E) et l'hôte
+      // PRONOTE (E3-P) ne se corrigent pas de la même façon. Un domaine
+      // inexistant (E3-D) ne se corrige pas en réessayant, et un PRONOTE
+      // lent (E3-T) demande juste du temps.
+      const entHop = isEntHostname(host)
       throw new PronoteError(
         aborted ? 'PRONOTE_TIMEOUT' : dns ? 'PRONOTE_DNS' : 'PRONOTE_NETWORK',
         aborted
           ? 'PRONOTE met trop de temps à répondre. Réessaie dans quelques instants.'
           : dns
             ? 'L’adresse PRONOTE ne mène à aucun serveur (domaine introuvable). Ouvre PRONOTE depuis ton ENT, copie l’adresse de la page et colle-la dans le champ « Adresse PRONOTE de ton lycée ».'
-            : 'Impossible de joindre PRONOTE à cette adresse. Ouvre PRONOTE depuis ton ENT, copie l’adresse de la page et colle-la dans le champ « Adresse PRONOTE de ton lycée », puis réessaie.',
+            : entHop
+              ? 'Le portail MonLycée n’a pas pu être joint depuis Pr8note. Réessaie dans quelques minutes ; si cela persiste, ouvre PRONOTE depuis ton ENT une première fois.'
+              : 'Impossible de joindre PRONOTE à cette adresse. Ouvre PRONOTE depuis ton ENT, copie l’adresse de la page et colle-la dans le champ « Adresse PRONOTE de ton lycée », puis réessaie.',
         502,
-        aborted ? 'E3-T' : dns ? 'E3-D' : 'E3-N',
+        aborted ? 'E3-T' : dns ? 'E3-D' : entHop ? 'E3-E' : 'E3-P',
       )
     } finally {
       clearTimeout(timer)

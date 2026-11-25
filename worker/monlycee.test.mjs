@@ -204,12 +204,50 @@ test('un échec réseau sur la première adresse essaie la suivante', async () =
   })
 
   assert.equal(result.school, null)
-  assert.equal(result.schoolError.stage, 'E3-N')
+  // L'hôte qui échoue ici est PRONOTE (pas le portail MonLycée) : E3-P.
+  assert.equal(result.schoolError.stage, 'E3-P')
   assert.match(result.schoolError.message, /2 adresses essayées/)
   assert.ok(
     pronoteCalls.length >= 2,
     `une seule adresse essayée : ${pronoteCalls.join(', ')}`,
   )
+})
+
+test('l’adresse fournie prime sur l’échec de l’adresse devinée', async () => {
+  const base = mockFetch()
+  const fetchImpl = async (url, init = {}) => {
+    const target = String(url)
+    if (target.includes('0782567s.index-education.net')) {
+      // PRONOTE répond, mais demande sa propre connexion (E7).
+      return new Response('<html><body>Veuillez saisir votre mot de passe</body></html>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      })
+    }
+    if (target.includes('0751234a.index-education.net')) {
+      const failure = new TypeError('fetch failed')
+      failure.cause = { code: 'ENOTFOUND', message: 'DNS record not found' }
+      throw failure
+    }
+    if (target === 'https://psn.monlycee.net/') {
+      return response(200, {
+        body: '<!doctype html><html><body>Établissement 0751234A</body></html>',
+      })
+    }
+    return base.fetchImpl(url, init)
+  }
+
+  const result = await loginToMonlycee('camille.durand', 'secret', {
+    fetchImpl,
+    startUrl: START,
+    pronoteUrl: 'https://0782567s.index-education.net/pronote/eleve.html',
+  })
+
+  assert.equal(result.school, null)
+  // Sans ce correctif, l'échec DNS de l'adresse devinée écrasait le E7.
+  assert.equal(result.schoolError.stage, 'E7')
+  assert.doesNotMatch(result.schoolError.message, /E3-/)
+  assert.match(result.schoolError.message, /2 adresses essayées/)
 })
 
 test('un domaine PRONOTE introuvable se distingue et demande l’adresse', async () => {

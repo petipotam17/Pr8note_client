@@ -709,6 +709,19 @@ function mayTryAnotherAddress(error) {
 }
 
 /**
+ * Toutes les pannes ne se valent pas : un refus ou une page PRONOTE réelle
+ * explique beaucoup plus qu'une adresse devinée qui ne résout pas. Sans ce
+ * classement, l'échec de la seconde adresse (devinée) masquait celui de
+ * l'adresse fournie par l'élève, qui était pourtant la bonne.
+ *
+ * @param {unknown} error
+ */
+function failureRank(error) {
+  if (!(error instanceof PronoteError)) return 2
+  return ['E3-D', 'E3-E', 'E3-P', 'E3-N', 'E3-T'].includes(error.stage) ? 0 : 1
+}
+
+/**
  * @param {string} username
  * @param {string} password
  * @param {{ fetchImpl?: typeof fetch; startUrl?: string; pronoteUrl?: string }} [options]
@@ -868,7 +881,10 @@ export async function loginToMonlycee(username, password, options = {}) {
       connection = await openPronoteSession({ url: candidate, jar, fetchImpl, credentials })
       break
     } catch (error) {
-      failure = error
+      // On conserve l'échec le plus parlant, pas le dernier essayé : sinon
+      // l'adresse devinée du RNE, souvent inexistante, masque la vraie
+      // réponse de PRONOTE sur l'adresse de l'élève.
+      if (!failure || failureRank(error) > failureRank(failure)) failure = error
       // Une adresse peut être mauvaise sans que le compte soit en cause :
       // on essaie la suivante tant que l'échec le permet.
       if (!mayTryAnotherAddress(error)) break
