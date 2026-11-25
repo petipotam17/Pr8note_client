@@ -96,6 +96,7 @@ export function describePronoteError(error) {
  *   W4 PRONOTE limite les connexions
  *   W5 réponse PRONOTE illisible ou trop lente
  *   W6 lecture des données refusée
+ *   W7 trop de requêtes pour une seule connexion (limite de l'hébergeur)
  */
 
 /* ------------------------------------------------------------------ */
@@ -359,6 +360,29 @@ function failureKind(error) {
   return 'X'
 }
 
+/**
+ * Une invocation de Worker est limitée en nombre de requêtes sortantes (50).
+ * Sans compteur, PRONOTE échouait avec un message interne de l'hébergeur ;
+ * avec lui, on s'arrête proprement et on garde un code honnête (W7).
+ *
+ * @param {{ budget?: { used: number; max: number } } | undefined} options
+ */
+function budgetExhausted() {
+  return new PronoteError(
+    'PRONOTE_BUDGET',
+    'PRONOTE a demandé trop d’étapes pour ouvrir la session. Réessaie dans quelques minutes.',
+    502,
+    'W7',
+  )
+}
+
+function takeSubrequest(options) {
+  const budget = options?.budget
+  if (!budget) return
+  if (Number.isFinite(budget.max) && budget.used >= budget.max) throw budgetExhausted()
+  budget.used += 1
+}
+
 function hostClassSuffix(host, entryHost) {
   if (!entryHost || host === entryHost) return ''
   return host.endsWith('.index-education.com') ? '-C' : '-A'
@@ -430,6 +454,7 @@ async function fetchWithJar(url, init, jar, options) {
     // dépassé : là, le serveur a peut-être déjà traité la demande.
     const attempts = method === 'GET' || method === 'HEAD' || method === 'POST' ? 2 : 1
     for (let attempt = 0; attempt < attempts && !response; attempt += 1) {
+      takeSubrequest(options)
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), PRONOTE_TIMEOUT_MS)
       try {
@@ -660,7 +685,7 @@ function pronoteLinks(body, baseUrl) {
  * @param {typeof fetch} [fetchImpl]
  * @param {string} [hint] RNE connu par ailleurs (identité MonLycée).
  */
-export async function discoverPronoteCandidates(jar, fetchImpl = fetch, hint = '') {
+export async function discoverPronoteCandidates(jar, fetchImpl = fetch, hint = '', budget = null) {
   let uai = /^\d{7}[A-Z]$/.test(hint) ? hint : ''
   const links = []
   try {
@@ -668,7 +693,7 @@ export async function discoverPronoteCandidates(jar, fetchImpl = fetch, hint = '
       PORTAL_HOME,
       { method: 'GET', headers: HTML_HEADERS },
       jar,
-      { fetchImpl, allowedHosts: new Set(['psn.monlycee.net', 'auth.monlycee.net']) },
+      { fetchImpl, allowedHosts: new Set(['psn.monlycee.net', 'auth.monlycee.net']), budget },
     )
     if (response.ok) {
       const body = await response.text()
@@ -790,6 +815,7 @@ class PronoteSession {
     this.jar = config.jar
     this.allowedHosts = config.allowedHosts
     this.recordFailure = config.recordFailure || null
+    this.budget = config.budget || null
     this.order = 1
     this.deadline = Date.now() + PRONOTE_SYNC_BUDGET_MS
     this.aesKey = md5(new Uint8Array(0))
@@ -894,6 +920,7 @@ class PronoteSession {
         fetchImpl: this.fetchImpl,
         allowedHosts: this.allowedHosts,
         recordFailure: this.recordFailure,
+        budget: this.budget,
       },
     )
 
@@ -1300,6 +1327,8 @@ export async function openPronoteSession({
   fetchImpl = fetch,
   credentials = null,
   recordFailure = null,
+  budget = null,
+  progress = null,
 }) {
   const normalized = normalizePronoteUrl(url)
   if (!normalized)
@@ -1308,14 +1337,26 @@ export async function openPronoteSession({
   const host = normalizeHost(new URL(normalized).hostname)
   if (typeof jar.allowHost === 'function') jar.allowHost(host)
   const allowedHosts = new Set([host])
-  const entryOptions = { fetchImpl, allowedHosts, credentials, entryHost: host, recordFailure }
+  const entryOptions = { fetchImpl, allowedHosts, credentials, entryHost: host, recordFailure, budget }
 
   const candidates = entryCandidates(normalized)
 
   let page = null
   let score = -1
   let entLogins = 0
+  // Chaque point d'entrée peut coûter une nouvelle connexion à l'ENT ; le
+  // budget de l'invocation ne permet pas de les essayer tous.
+  const maxCandidates = 3
+  let explored = 0
   for (const candidate of candidates) {
+    if (explored >= maxCandidates) break
+    if (budget && Number.isFinite(budget.max) && budget.used >= budget.max) {
+      // Sans budget, explorer davantage ne ferait qu'échouer plus loin :
+      // on le dit franchement au lieu d'annoncer une page inattendue.
+      if (page?.attributes) break
+      throw budgetExhausted()
+    }
+    explored += 1
     let current
     try {
       current = await readEntryPage(candidate, jar, entryOptions)
@@ -1348,8 +1389,9 @@ export async function openPronoteSession({
   // La connexion à l'ENT a réussi pendant l'essai : PRONOTE peut maintenant
   // accepter une nouvelle requête sur l'adresse exacte de l'élève.
   if (!page?.attributes && entLogins > 0) {
-    const retry = await readEntryPage(candidates[0], jar, entryOptions)
-    if (retry.attributes || retry.response.ok) page = retry
+    const enough = !budget || !Number.isFinite(budget.max) || budget.max - budget.used >= 8
+    const retry = enough ? await readEntryPage(candidates[0], jar, entryOptions) : null
+    if (retry && (retry.attributes || retry.response.ok)) page = retry
   }
 
   if (!page) {
@@ -1412,6 +1454,9 @@ export async function openPronoteSession({
       'E6',
     )
   }
+  // La page PRONOTE a bien été ouverte : l'adresse est la bonne. Une erreur
+  // qui suit (API, chiffrement) ne se corrige pas en changeant d'adresse.
+  if (progress) progress.addressConfirmed = true
 
   const root = page.finalUrl.replace(/\/[^/]*$/, '')
   // Sans numéro de version dans la page, la présence des indicateurs CrA/CoA
@@ -1425,6 +1470,7 @@ export async function openPronoteSession({
     jar,
     allowedHosts,
     recordFailure,
+    budget,
   })
 
   const options = await session.request('FonctionParametres', {

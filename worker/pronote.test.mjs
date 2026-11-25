@@ -10,6 +10,7 @@ import {
   fetchSchoolData,
   md5Hex,
   normalizePronoteUrl,
+  openPronoteSession,
   parseStartAttributes,
   PronoteError,
   readEntryPage,
@@ -952,4 +953,29 @@ test('le bloc Start est lu même avec des accolades dans une valeur', () => {
   assert.equal(attributes?.h, '4242')
   assert.equal(attributes?.a, '6')
   assert.equal(attributes?.f, 'mot}de{passe')
+})
+
+test('le budget de requêtes s’arrête avant la limite de l’hébergeur', async () => {
+  let calls = 0
+  const fetchImpl = async () => {
+    calls += 1
+    return new Response('', { status: 200 })
+  }
+
+  await assert.rejects(
+    () =>
+      openPronoteSession({
+        url: 'https://0782567s.index-education.net/pronote/eleve.html',
+        jar,
+        fetchImpl,
+        budget: { used: 0, max: 0 },
+      }),
+    (error) => {
+      assert.ok(error instanceof PronoteError)
+      assert.equal(error.stage, 'W7')
+      return true
+    },
+  )
+  // Aucune requête n’est partie : le plafond est respecté avant l’appel.
+  assert.equal(calls, 0)
 })

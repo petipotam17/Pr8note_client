@@ -283,3 +283,41 @@ test('un domaine PRONOTE introuvable se distingue et demande l’adresse', async
   // Ni hôte ni RNE ne doivent apparaître dans le message.
   assert.doesNotMatch(result.schoolError.message, /index-education|0751234/i)
 })
+
+test('une adresse qui ouvre PRONOTE n’est pas réessayée après un échec de l’API', async () => {
+  const base = mockFetch()
+  const seen = []
+  const startPage =
+    '<!doctype html><html><body onload="try { Start ({h:\'4242\',CrA:true,CoA:true,a:6,e:\'camille.durand\',f:\'secret-ent\'}) } catch (e) {}">' +
+    '<span>PRONOTE 2025.2.0</span></body></html>'
+
+  const fetchImpl = async (url, init = {}) => {
+    const target = String(url)
+    if (target.includes('index-education.net')) {
+      seen.push(target)
+      if (target.includes('/appelfonction/')) throw new TypeError('fetch failed')
+      return response(200, { body: startPage })
+    }
+    if (target === 'https://psn.monlycee.net/') {
+      // Tableau de bord sans tuile : seul le RNE pourrait mener ailleurs.
+      return response(200, { body: '<!doctype html><html><body>0751234A</body></html>' })
+    }
+    return base.fetchImpl(url, init)
+  }
+
+  const result = await loginToMonlycee('camille.durand', 'secret', {
+    fetchImpl,
+    startUrl: START,
+    pronoteUrl: 'https://0782567s.index-education.net/pronote/eleve.html',
+  })
+
+  assert.equal(result.school, null)
+  assert.match(result.schoolError.stage, /^E3-PP5/)
+  // L'adresse a bien ouvert l'Espace élève : une seconde adresse ne peut pas
+  // corriger un refus de l'API et coûtait tout le budget de requêtes.
+  assert.doesNotMatch(result.schoolError.message, /adresses essayées/)
+  assert.ok(
+    !seen.some((target) => target.includes('0751234a')),
+    `adresse devinée essayée : ${seen.join(', ')}`,
+  )
+})

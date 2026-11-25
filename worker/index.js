@@ -436,6 +436,16 @@ async function fetchFollowing(url, init, jar, options = {}) {
   let body = init.body
 
   for (let redirect = 0; redirect <= maxRedirects; redirect += 1) {
+    if (options.budget) {
+      if (options.budget.used >= options.budget.max) {
+        throw new LoginError(
+          'STEP_LIMIT',
+          'La connexion a demandé trop d’étapes. Réessaie dans quelques instants.',
+          502,
+        )
+      }
+      options.budget.used += 1
+    }
     if (!isAllowedHost(current.hostname)) {
       throw new LoginError(
         'UNSUPPORTED_PROVIDER',
@@ -657,7 +667,7 @@ export function parseIdentityPayload(payload, username) {
  * @param {string} username
  * @param {typeof fetch} [fetchImpl]
  */
-async function readIdentity(jar, username, fetchImpl = fetch) {
+async function readIdentity(jar, username, fetchImpl = fetch, budget = null) {
   const endpoints = [
     `${PORTAL_ORIGIN}/oauth2/userinfo`,
     `${PORTAL_ORIGIN}/directory/user/me`,
@@ -671,7 +681,7 @@ async function readIdentity(jar, username, fetchImpl = fetch) {
         endpoint,
         { method: 'GET', headers: { Accept: 'application/json' } },
         jar,
-        { fetchImpl, maxRedirects: 4 },
+        { fetchImpl, maxRedirects: 2, budget },
       )
       if (!response.ok) continue
       const text = (await response.text()).trim()
@@ -701,6 +711,10 @@ const MAX_SCHOOL_ATTEMPTS = 2
 // Budget total des essais d'adresses : au-delà, on rend la main à l'élève
 // plutôt que de laisser la requête traîner.
 const SCHOOL_ATTEMPTS_BUDGET_MS = 30_000
+// L'hébergeur limite les requêtes sortantes d'une invocation (50). On garde
+// une marge pour la réponse et on s'arrête nous-mêmes au lieu de laisser
+// PRONOTE échouer sur un message interne incompréhensible.
+const SUBREQUEST_BUDGET = 44
 
 /**
  * Erreur PRONOTE telle qu'elle est renvoyée au client, avec son code d'étape
@@ -755,6 +769,9 @@ function logSchoolFailure(error, attempts = 0) {
  */
 function mayTryAnotherAddress(error) {
   if (!(error instanceof PronoteError)) return false
+  // L'adresse a ouvert l'Espace élève : elle est bonne, inutile d'en essayer
+  // une autre (cela coûtait le budget de requêtes d'une session entière).
+  if (error.addressConfirmed) return false
   return !['E8', 'W2', 'W3', 'W4'].includes(error.stage)
 }
 
@@ -768,6 +785,9 @@ function mayTryAnotherAddress(error) {
  */
 function failureRank(error) {
   if (!(error instanceof PronoteError)) return 2
+  // Une erreur survenue après ouverture de l'Espace élève décrit le compte
+  // réel : elle prime sur tout échec d'adresse.
+  if (error.addressConfirmed) return 3
   const stage = String(error.stage || '')
   return stage.startsWith('E3-') ? 0 : 1
 }
@@ -781,12 +801,15 @@ export async function loginToMonlycee(username, password, options = {}) {
   const fetchImpl = options.fetchImpl || fetch
   const startUrl = options.startUrl || START_URL
   const jar = new CookieJar()
+  // Compteur partagé par toute la connexion (MonLycée puis PRONOTE) : la
+  // limite de l'hébergeur porte sur l'invocation, pas sur un service.
+  const budget = { used: 0, max: SUBREQUEST_BUDGET }
 
   const started = await fetchFollowing(
     startUrl,
     { method: 'GET', headers: BROWSER_HEADERS },
     jar,
-    { fetchImpl },
+    { fetchImpl, budget },
   )
 
   const loginHtml = await started.response.text()
@@ -843,7 +866,7 @@ export async function loginToMonlycee(username, password, options = {}) {
       body: fields,
     },
     jar,
-    { fetchImpl },
+    { fetchImpl, budget },
   )
 
   const resultHtml = await posted.response.text()
@@ -882,7 +905,7 @@ export async function loginToMonlycee(username, password, options = {}) {
     )
   }
 
-  const identity = await readIdentity(jar, username, fetchImpl)
+  const identity = await readIdentity(jar, username, fetchImpl, budget)
   const student = identity.student
   const verifiedAt = new Date().toISOString()
 
@@ -916,7 +939,9 @@ export async function loginToMonlycee(username, password, options = {}) {
       if (discoveryPending) {
         discoveryPending = false
         try {
-          candidates.push(...(await discoverPronoteCandidates(jar, fetchImpl, identity.uai)))
+          candidates.push(
+            ...(await discoverPronoteCandidates(jar, fetchImpl, identity.uai, budget)),
+          )
         } catch {
           // La découverte reste un confort : l'élève peut saisir l'adresse.
         }
@@ -928,6 +953,9 @@ export async function loginToMonlycee(username, password, options = {}) {
 
     tried.add(candidate)
     pronoteUrl = candidate
+    // Renseigné dès que la page PRONOTE est ouverte : l'adresse est alors
+    // acquise, même si l'API refuse ensuite.
+    const progress = { addressConfirmed: false }
     try {
       connection = await openPronoteSession({
         url: candidate,
@@ -935,9 +963,14 @@ export async function loginToMonlycee(username, password, options = {}) {
         fetchImpl,
         credentials,
         recordFailure: options.recordFailure || null,
+        budget,
+        progress,
       })
       break
     } catch (error) {
+      if (progress.addressConfirmed && error instanceof PronoteError) {
+        error.addressConfirmed = true
+      }
       // On conserve l'échec le plus parlant, pas le dernier essayé : sinon
       // l'adresse devinée du RNE, souvent inexistante, masque la vraie
       // réponse de PRONOTE sur l'adresse de l'élève.
@@ -949,6 +982,25 @@ export async function loginToMonlycee(username, password, options = {}) {
   }
 
   if (!connection) {
+    // Trace temporaire de la consommation de requêtes : sans elle, un
+    // dépassement de limite reste invisible.
+    if (typeof options.recordFailure === 'function') {
+      try {
+        const written = options.recordFailure({
+          stage: 'FLOW',
+          method: 'FLOW',
+          url: 'https://flow.invalid/',
+          body: '',
+          error: {
+            name: 'Flow',
+            message: `budget ${budget.used}/${budget.max} · ${tried.size} adresse(s)`,
+          },
+        })
+        if (written && typeof written.then === 'function') await written
+      } catch {
+        // Le diagnostic ne doit jamais gêner la connexion.
+      }
+    }
     if (!failure) {
       return {
         student,
