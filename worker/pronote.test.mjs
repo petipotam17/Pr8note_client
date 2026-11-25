@@ -841,6 +841,23 @@ test('le code établissement du portail reconstruit l’adresse PRONOTE', async 
   assert.deepEqual(candidates, ['https://0751234a.index-education.net/pronote/eleve.html'])
 })
 
+test('un second lien PRONOTE n’évince pas l’adresse déduite du RNE', async () => {
+  const portal = createFakePortal({
+    'https://psn.monlycee.net/': {
+      body: `<!doctype html><html><body>
+        <a href="https://0751234a.index-education.net/pronote/parent.html">PRONOTE</a>
+        <a href="https://www.index-education.com/fr/logiciel-pronote.php">PRONOTE</a>
+        <span>Établissement 0751234A</span>
+      </body></html>`,
+    },
+  })
+
+  const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl)
+  assert.equal(candidates.length, 2)
+  assert.equal(candidates[0], 'https://0751234a.index-education.net/pronote/parent.html')
+  assert.equal(candidates[1], 'https://0751234a.index-education.net/pronote/eleve.html')
+})
+
 test('un RNE fourni par l’identité suffit, sans tuile', async () => {
   const portal = createFakePortal({
     'https://psn.monlycee.net/': { body: '<!doctype html><html><body>Portail</body></html>' },

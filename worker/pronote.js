@@ -544,7 +544,7 @@ function pronoteLinks(body, baseUrl) {
 /**
  * Adresses PRONOTE possibles pour cet élève, dans l'ordre :
  *   1. le lien de la tuile PRONOTE du tableau de bord MonLycée ;
- *   2. l'adresse déduite du code établissement (RNE) : les lycées hébergés
+ *   2. l'adresse déduite du code établissement (RNE), toujours conservée : les lycées hébergés
  *      chez Index Éducation suivent toujours le modèle
  *      https://RNE.index-education.net/pronote/.
  *
@@ -557,13 +557,7 @@ function pronoteLinks(body, baseUrl) {
  */
 export async function discoverPronoteCandidates(jar, fetchImpl = fetch, hint = '') {
   let uai = /^\d{7}[A-Z]$/.test(hint) ? hint : ''
-  const candidates = []
-
-  const add = (value) => {
-    const normalized = normalizePronoteUrl(value)
-    if (normalized && !candidates.includes(normalized)) candidates.push(normalized)
-  }
-
+  const links = []
   try {
     const { response, finalUrl } = await fetchWithJar(
       PORTAL_HOME,
@@ -573,18 +567,28 @@ export async function discoverPronoteCandidates(jar, fetchImpl = fetch, hint = '
     )
     if (response.ok) {
       const body = await response.text()
-      for (const link of pronoteLinks(body, finalUrl)) add(link)
+      for (const link of pronoteLinks(body, finalUrl)) {
+        const normalized = normalizePronoteUrl(link)
+        if (normalized && !links.includes(normalized)) links.push(normalized)
+      }
       uai ||= /\b(\d{7}[A-Z])\b/.exec(body)?.[1] ?? ''
     }
   } catch {
     // La découverte est un confort : l'élève peut fournir l'adresse lui-même.
   }
 
+  // La tuile d'abord, puis l'adresse déduite du RNE : elle reste en seconde
+  // position même si le tableau de bord expose plusieurs liens PRONOTE, car
+  // c'est la seule adresse qui ne dépend pas du contenu de la page.
+  const candidates = links.slice(0, 1)
   if (/^\d{7}[A-Z]$/.test(uai)) {
-    add(`https://${uai.toLowerCase()}.index-education.net/pronote/eleve.html`)
+    const fromRne = normalizePronoteUrl(
+      `https://${uai.toLowerCase()}.index-education.net/pronote/eleve.html`,
+    )
+    if (fromRne) candidates.push(fromRne)
   }
 
-  return candidates.slice(0, 2)
+  return candidates.filter((url, index) => candidates.indexOf(url) === index)
 }
 
 /**
