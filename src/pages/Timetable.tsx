@@ -9,7 +9,7 @@ import {
   MapPin,
   User,
 } from 'lucide-react'
-import { LESSONS, SUBJECTS } from '../data/seed'
+import { useSchool } from '../lib/school'
 import type { Lesson } from '../types'
 import {
   addDays,
@@ -39,6 +39,7 @@ function isoWeekNumber(date: Date): number {
 }
 
 export function Timetable() {
+  const { subjects: SUBJECTS, lessons: LESSONS } = useSchool()
   const now = useNow(30_000)
   const [weekOffset, setWeekOffset] = useState(0)
   const [selected, setSelected] = useState<{ lesson: Lesson; date: Date } | null>(null)
@@ -46,12 +47,17 @@ export function Timetable() {
   const monday = addDays(startOfWeek(now), weekOffset * 7)
   const dates = Array.from({ length: 5 }, (_, index) => addDays(monday, index))
   const minutesNow = now.getHours() * 60 + now.getMinutes()
-  const weekTotal = LESSONS.reduce(
+  const firstDay = isoDate(dates[0])
+  const lastDay = isoDate(dates[4])
+  const weekLessons = LESSONS.filter((lesson) =>
+    lesson.date ? lesson.date >= firstDay && lesson.date <= lastDay : true,
+  )
+  const weekTotal = weekLessons.reduce(
     (sum, lesson) => sum + (timeToMinutes(lesson.end) - timeToMinutes(lesson.start)),
     0,
   )
-  const canceledCount = LESSONS.filter((lesson) => lesson.status === 'canceled').length
-  const modifiedCount = LESSONS.filter((lesson) => lesson.status === 'modified').length
+  const canceledCount = weekLessons.filter((lesson) => lesson.status === 'canceled').length
+  const modifiedCount = weekLessons.filter((lesson) => lesson.status === 'modified').length
 
   const weekLabel = `${formatDateShort(isoDate(dates[0]))} – ${formatDateShort(isoDate(dates[4]))}`
   const selectedSubject = selected ? SUBJECTS.find((subject) => subject.id === selected.lesson.subjectId) : null
@@ -92,7 +98,7 @@ export function Timetable() {
           <Clock size={15} /> {Math.round(weekTotal / 60)} h de cours
         </span>
         <span>
-          <CalendarDays size={15} /> {LESSONS.length} cours
+          <CalendarDays size={15} /> {weekLessons.length} cours
         </span>
         {canceledCount > 0 && (
           <span className="warn">
@@ -129,9 +135,10 @@ export function Timetable() {
             </div>
 
             {dates.map((date, index) => {
-              const lessons = LESSONS.filter((lesson) => lesson.weekday === index).sort((a, b) =>
-                a.start.localeCompare(b.start),
-              )
+              const dayIso = isoDate(date)
+              const lessons = LESSONS.filter((lesson) =>
+                lesson.date ? lesson.date === dayIso : lesson.weekday === index,
+              ).sort((a, b) => a.start.localeCompare(b.start))
               const isToday = weekOffset === 0 && weekdayIndex(now) === index
               return (
                 <div key={date.toISOString()} className={`tt-col ${isToday ? 'is-today' : ''}`}>

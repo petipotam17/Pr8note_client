@@ -15,6 +15,19 @@
  *   ->   lecture de /oauth2/userinfo (ou /directory/user/me)
  */
 
+import {
+  RATE_LIMIT_RETRY_AFTER_SECONDS,
+  consumeRateLimit,
+  ensureRateLimitSchema,
+  refundRateLimit,
+} from './rateLimit.js'
+import {
+  PronoteError,
+  discoverPronoteUrl,
+  fetchSchoolData,
+  normalizePronoteUrl,
+} from './pronote.js'
+
 const PORTAL_ORIGIN = 'https://psn.monlycee.net'
 const START_URL = `${PORTAL_ORIGIN}/oauth2/start?rd=${encodeURIComponent(`${PORTAL_ORIGIN}/`)}`
 const ALLOWED_HOSTS = new Set(['psn.monlycee.net', 'auth.monlycee.net'])
@@ -29,8 +42,6 @@ const ALLOWED_ORIGINS = new Set([
 const REQUEST_TIMEOUT_MS = 18_000
 const MAX_REDIRECTS = 12
 const MAX_BODY_BYTES = 4096
-const RATE_WINDOW_MS = 10 * 60_000
-const RATE_MAX_ATTEMPTS = 10
 
 const BROWSER_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -40,9 +51,6 @@ const BROWSER_HEADERS = {
   'User-Agent':
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Pr8note/1.0',
 }
-
-/** @type {Map<string, number[]>} */
-const attemptsByAddress = new Map()
 
 export class LoginError extends Error {
   /**
@@ -192,6 +200,25 @@ export class CookieJar {
   constructor() {
     /** @type {Map<string, { name: string; value: string; domain: string; path: string; hostOnly: boolean; secure: boolean; expiresAt: number | null }>} */
     this.cookies = new Map()
+    /** Hôtes supplémentaires autorisés (le PRONOTE de l'établissement). */
+    this.extraHosts = new Set()
+  }
+
+  /** @param {string} host */
+  allowHost(host) {
+    const normalized = host.toLowerCase().replace(/^\./, '')
+    if (normalized) this.extraHosts.add(normalized)
+  }
+
+  /** @param {string} host */
+  allows(host) {
+    const normalized = host.toLowerCase().replace(/^\./, '')
+    if (isAllowedHost(normalized)) return true
+    if (this.extraHosts.has(normalized)) return true
+    for (const extra of this.extraHosts) {
+      if (extra.endsWith(`.${normalized}`)) return true
+    }
+    return false
   }
 
   /** @param {string} url */
@@ -240,7 +267,7 @@ export class CookieJar {
     }
 
     if (!domain || (!host.endsWith(domain) && host !== domain)) return
-    if (!isAllowedHost(domain)) return
+    if (!this.allows(domain)) return
 
     const key = `${domain}|${path}|${name}`
     if (expiresAt !== null && expiresAt <= Date.now()) {
@@ -618,7 +645,7 @@ async function readIdentity(jar, username, fetchImpl = fetch) {
 /**
  * @param {string} username
  * @param {string} password
- * @param {{ fetchImpl?: typeof fetch; startUrl?: string }} [options]
+ * @param {{ fetchImpl?: typeof fetch; startUrl?: string; pronoteUrl?: string }} [options]
  */
 export async function loginToMonlycee(username, password, options = {}) {
   const fetchImpl = options.fetchImpl || fetch
@@ -726,25 +753,57 @@ export async function loginToMonlycee(username, password, options = {}) {
   }
 
   const student = await readIdentity(jar, username, fetchImpl)
-  return { student, verifiedAt: new Date().toISOString() }
-}
+  const verifiedAt = new Date().toISOString()
 
-/** @param {string} address */
-function rateLimited(address) {
-  const now = Date.now()
-  const history = (attemptsByAddress.get(address) || []).filter((time) => now - time < RATE_WINDOW_MS)
-  if (history.length >= RATE_MAX_ATTEMPTS) {
-    attemptsByAddress.set(address, history)
-    return true
-  }
-  history.push(now)
-  attemptsByAddress.set(address, history)
-  if (attemptsByAddress.size > 2000) {
-    for (const [key, times] of attemptsByAddress) {
-      if (!times.some((time) => now - time < RATE_WINDOW_MS)) attemptsByAddress.delete(key)
+  // PRONOTE est un service séparé : on ouvre son Espace élève avec la session
+  // MonLycée qui vient d'être créée, puis on lit les données réelles. Un refus
+  // PRONOTE ne doit pas annuler une connexion MonLycée pourtant réussie.
+  let pronoteUrl = normalizePronoteUrl(options.pronoteUrl || '')
+  if (!pronoteUrl) pronoteUrl = await discoverPronoteUrl(jar, fetchImpl)
+
+  if (!pronoteUrl) {
+    return {
+      student,
+      verifiedAt,
+      school: null,
+      schoolError: {
+        code: 'PRONOTE_URL_REQUIRED',
+        message:
+          'Ajoute l’adresse PRONOTE de ton lycée pour afficher tes vraies notes, ton emploi du temps et ta messagerie.',
+      },
     }
   }
-  return false
+
+  try {
+    const school = await fetchSchoolData({ url: pronoteUrl, jar, fetchImpl })
+    const enriched = {
+      ...student,
+      className: school.student.className || student.className,
+      establishment: school.student.establishment || student.establishment,
+    }
+    return { student: enriched, verifiedAt, school, pronoteUrl }
+  } catch (error) {
+    if (typeof console !== 'undefined' && console.error) {
+      console.error('PRONOTE sync failed:', {
+        code: error instanceof PronoteError ? error.code : 'UNKNOWN',
+        name: error instanceof Error ? error.name : 'unknown',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+    return {
+      student,
+      verifiedAt,
+      school: null,
+      pronoteUrl,
+      schoolError: {
+        code: error instanceof PronoteError ? error.code : 'PRONOTE_UNAVAILABLE',
+        message:
+          error instanceof PronoteError
+            ? error.message
+            : 'PRONOTE n’a pas pu être synchronisé. Réessaie dans quelques instants.',
+      },
+    }
+  }
 }
 
 /** @param {string | null} origin */
@@ -787,148 +846,195 @@ function errorResponse(error, headers) {
   )
 }
 
-export default {
-  /**
-   * @param {Request} request
-   */
-  async fetch(request) {
-    const url = new URL(request.url)
-    const origin = request.headers.get('Origin')
-    const headers = corsHeaders(origin)
+/**
+ * @param {Request} request
+ * @param {{ DB?: D1Database }} env
+ * @param {(username: string, password: string) => Promise<{ student: object; verifiedAt: string }>} login
+ */
+async function handleRequest(request, env, login) {
+  const url = new URL(request.url)
+  const origin = request.headers.get('Origin')
+  const headers = corsHeaders(origin)
 
-    if (request.method === 'OPTIONS') {
-      if (origin && !headers['Access-Control-Allow-Origin']) {
-        return new Response(null, { status: 403 })
-      }
-      return new Response(null, { status: 204, headers })
+  if (request.method === 'OPTIONS') {
+    if (origin && !headers['Access-Control-Allow-Origin']) {
+      return new Response(null, { status: 403 })
     }
+    return new Response(null, { status: 204, headers })
+  }
 
-    if (url.pathname === '/health' && request.method === 'GET') {
-      return new Response(JSON.stringify({ ok: true, service: 'pr8note-auth' }), {
-        status: 200,
-        headers: jsonHeaders(headers),
+  if (url.pathname === '/health' && request.method === 'GET') {
+    return new Response(JSON.stringify({ ok: true, service: 'pr8note-auth' }), {
+      status: 200,
+      headers: jsonHeaders(headers),
+    })
+  }
+
+  if (url.pathname !== '/api/monlycee/login') {
+    return new Response(JSON.stringify({ error: 'NOT_FOUND', message: 'Route inconnue.' }), {
+      status: 404,
+      headers: jsonHeaders(headers),
+    })
+  }
+
+  if (request.method !== 'POST') {
+    return new Response(
+      JSON.stringify({ error: 'METHOD_NOT_ALLOWED', message: 'Méthode non autorisée.' }),
+      { status: 405, headers: jsonHeaders(headers) },
+    )
+  }
+
+  if (origin && origin !== 'null' && !ALLOWED_ORIGINS.has(origin)) {
+    return new Response(
+      JSON.stringify({ error: 'ORIGIN_NOT_ALLOWED', message: 'Origine non autorisée.' }),
+      { status: 403, headers: jsonHeaders() },
+    )
+  }
+
+  const address =
+    request.headers.get('CF-Connecting-IP') ||
+    request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
+    'local'
+
+  const contentType = request.headers.get('content-type') || ''
+  if (!contentType.toLowerCase().includes('application/json')) {
+    return new Response(
+      JSON.stringify({ error: 'BAD_CONTENT_TYPE', message: 'Requête invalide.' }),
+      { status: 415, headers: jsonHeaders(headers) },
+    )
+  }
+
+  let raw
+  try {
+    raw = await request.text()
+  } catch {
+    return new Response(JSON.stringify({ error: 'BAD_REQUEST', message: 'Requête illisible.' }), {
+      status: 400,
+      headers: jsonHeaders(headers),
+    })
+  }
+  if (raw.length > MAX_BODY_BYTES) {
+    return new Response(
+      JSON.stringify({ error: 'PAYLOAD_TOO_LARGE', message: 'Requête trop volumineuse.' }),
+      { status: 413, headers: jsonHeaders(headers) },
+    )
+  }
+
+  let body
+  try {
+    body = JSON.parse(raw)
+  } catch {
+    return new Response(JSON.stringify({ error: 'BAD_JSON', message: 'Requête invalide.' }), {
+      status: 400,
+      headers: jsonHeaders(headers),
+    })
+  }
+  if (!body || typeof body !== 'object') {
+    return new Response(JSON.stringify({ error: 'BAD_REQUEST', message: 'Requête invalide.' }), {
+      status: 400,
+      headers: jsonHeaders(headers),
+    })
+  }
+
+  const username = typeof body.username === 'string' ? body.username.trim() : ''
+  const password = typeof body.password === 'string' ? body.password : ''
+  const pronoteUrl = typeof body.pronoteUrl === 'string' ? body.pronoteUrl.trim().slice(0, 500) : ''
+  if (!username || !password) {
+    return new Response(
+      JSON.stringify({
+        error: 'MISSING_CREDENTIALS',
+        message: 'Renseigne ton identifiant et ton mot de passe MonLycée.',
+      }),
+      { status: 400, headers: jsonHeaders(headers) },
+    )
+  }
+  if (username.length > 254 || password.length > 512) {
+    return new Response(
+      JSON.stringify({ error: 'INVALID_CREDENTIALS', message: 'Identifiants invalides.' }),
+      { status: 400, headers: jsonHeaders(headers) },
+    )
+  }
+
+  let reservation
+  try {
+    await ensureRateLimitSchema(env?.DB)
+    reservation = await consumeRateLimit(env.DB, { ip: address, username })
+  } catch (error) {
+    // Si la base partagée est indisponible, on refuse la connexion plutôt
+    // que de laisser passer un flux illimité. Le détail reste dans les logs.
+    if (typeof console !== 'undefined' && console.error) {
+      console.error('Rate limit unavailable:', {
+        name: error instanceof Error ? error.name : 'unknown',
+        message: error instanceof Error ? error.message : String(error),
       })
     }
+    return new Response(
+      JSON.stringify({
+        error: 'AUTH_UNAVAILABLE',
+        message:
+          'Le service de connexion est momentanément indisponible. Réessaie dans quelques minutes.',
+      }),
+      { status: 503, headers: jsonHeaders(headers) },
+    )
+  }
 
-    if (url.pathname !== '/api/monlycee/login') {
-      return new Response(JSON.stringify({ error: 'NOT_FOUND', message: 'Route inconnue.' }), {
-        status: 404,
-        headers: jsonHeaders(headers),
-      })
-    }
+  if (!reservation.allowed) {
+    return new Response(
+      JSON.stringify({
+        error: 'RATE_LIMITED',
+        // Message volontairement identique pour l'IP et l'identifiant.
+        message: 'Trop de tentatives de connexion. Attends quelques minutes avant de réessayer.',
+      }),
+      {
+        status: 429,
+        headers: { ...jsonHeaders(headers), 'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS) },
+      },
+    )
+  }
 
-    if (request.method !== 'POST') {
-      return new Response(
-        JSON.stringify({ error: 'METHOD_NOT_ALLOWED', message: 'Méthode non autorisée.' }),
-        { status: 405, headers: jsonHeaders(headers) },
-      )
-    }
-
-    if (origin && origin !== 'null' && !ALLOWED_ORIGINS.has(origin)) {
-      return new Response(
-        JSON.stringify({ error: 'ORIGIN_NOT_ALLOWED', message: 'Origine non autorisée.' }),
-        { status: 403, headers: jsonHeaders() },
-      )
-    }
-
-    const address =
-      request.headers.get('CF-Connecting-IP') ||
-      request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
-      'local'
-
-    if (rateLimited(address)) {
-      return new Response(
-        JSON.stringify({
-          error: 'RATE_LIMITED',
-          message: 'Trop de tentatives. Attends quelques minutes avant de réessayer.',
-        }),
-        {
-          status: 429,
-          headers: { ...jsonHeaders(headers), 'Retry-After': String(Math.ceil(RATE_WINDOW_MS / 1000)) },
-        },
-      )
-    }
-
-    const contentType = request.headers.get('content-type') || ''
-    if (!contentType.toLowerCase().includes('application/json')) {
-      return new Response(
-        JSON.stringify({ error: 'BAD_CONTENT_TYPE', message: 'Requête invalide.' }),
-        { status: 415, headers: jsonHeaders(headers) },
-      )
-    }
-
-    let raw
+  try {
+    const result = await login(username, password, { pronoteUrl })
     try {
-      raw = await request.text()
-    } catch {
-      return new Response(JSON.stringify({ error: 'BAD_REQUEST', message: 'Requête illisible.' }), {
-        status: 400,
-        headers: jsonHeaders(headers),
-      })
-    }
-    if (raw.length > MAX_BODY_BYTES) {
-      return new Response(
-        JSON.stringify({ error: 'PAYLOAD_TOO_LARGE', message: 'Requête trop volumineuse.' }),
-        { status: 413, headers: jsonHeaders(headers) },
-      )
-    }
-
-    let body
-    try {
-      body = JSON.parse(raw)
-    } catch {
-      return new Response(JSON.stringify({ error: 'BAD_JSON', message: 'Requête invalide.' }), {
-        status: 400,
-        headers: jsonHeaders(headers),
-      })
-    }
-    if (!body || typeof body !== 'object') {
-      return new Response(JSON.stringify({ error: 'BAD_REQUEST', message: 'Requête invalide.' }), {
-        status: 400,
-        headers: jsonHeaders(headers),
-      })
-    }
-
-    const username = typeof body.username === 'string' ? body.username.trim() : ''
-    const password = typeof body.password === 'string' ? body.password : ''
-    if (!username || !password) {
-      return new Response(
-        JSON.stringify({
-          error: 'MISSING_CREDENTIALS',
-          message: 'Renseigne ton identifiant et ton mot de passe MonLycée.',
-        }),
-        { status: 400, headers: jsonHeaders(headers) },
-      )
-    }
-    if (username.length > 254 || password.length > 512) {
-      return new Response(
-        JSON.stringify({ error: 'INVALID_CREDENTIALS', message: 'Identifiants invalides.' }),
-        { status: 400, headers: jsonHeaders(headers) },
-      )
-    }
-
-    try {
-      const result = await loginToMonlycee(username, password)
-      return new Response(
-        JSON.stringify({
-          student: result.student,
-          verifiedAt: result.verifiedAt,
-        }),
-        { status: 200, headers: jsonHeaders(headers) },
-      )
+      await refundRateLimit(env.DB, reservation)
     } catch (error) {
-      // Ne jamais journaliser les identifiants ni le corps de la requête.
-      if (error instanceof LoginError) {
-        return errorResponse(error, headers)
-      }
+      // Le remboursement ne doit pas annuler une connexion pourtant réussie.
       if (typeof console !== 'undefined' && console.error) {
-        console.error('MonLycée login failed:', {
+        console.error('Rate limit refund failed:', {
           name: error instanceof Error ? error.name : 'unknown',
           message: error instanceof Error ? error.message : String(error),
-          url: redactUrl(url.toString()),
         })
       }
+    }
+    return new Response(
+      JSON.stringify({
+        student: result.student,
+        verifiedAt: result.verifiedAt,
+        school: result.school ?? null,
+        schoolError: result.schoolError ?? null,
+        pronoteUrl: result.pronoteUrl ?? null,
+      }),
+      { status: 200, headers: jsonHeaders(headers) },
+    )
+  } catch (error) {
+    // Ne jamais journaliser les identifiants ni le corps de la requête.
+    if (error instanceof LoginError) {
       return errorResponse(error, headers)
     }
-  },
+    if (typeof console !== 'undefined' && console.error) {
+      console.error('MonLycée login failed:', {
+        name: error instanceof Error ? error.name : 'unknown',
+        message: error instanceof Error ? error.message : String(error),
+        url: redactUrl(url.toString()),
+      })
+    }
+    return errorResponse(error, headers)
+  }
 }
+
+export function createWorker(login = loginToMonlycee) {
+  return {
+    fetch: (request, env) => handleRequest(request, env, login),
+  }
+}
+
+export default createWorker()

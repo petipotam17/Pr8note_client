@@ -1,4 +1,4 @@
-export type PeriodId = 'T1' | 'T2'
+export type PeriodId = string
 export type ThemeMode = 'dark' | 'light'
 export type AccentId = 'violet' | 'cyan' | 'emerald' | 'sunset' | 'rose'
 export type Density = 'comfortable' | 'compact'
@@ -51,6 +51,8 @@ export interface Lesson {
   id: string
   subjectId: string
   weekday: number
+  /** Date réelle du cours (YYYY-MM-DD), absente pour les données de démonstration. */
+  date?: string
   start: string
   end: string
   room: string
@@ -66,6 +68,8 @@ export interface Homework {
   due: string
   minutes: number
   type: 'exercices' | 'lecture' | 'dm' | 'revisions' | 'oral'
+  /** Déjà marqué fait dans PRONOTE. */
+  done?: boolean
 }
 
 export interface LifeEvent {
@@ -133,9 +137,58 @@ export interface Period {
   range: string
 }
 
+export interface SchoolPeriod {
+  id: PeriodId
+  pronoteId?: string
+  name: string
+  start: string
+  end: string
+  range: string
+}
+
+export interface SchoolSubjectAverage {
+  period: PeriodId
+  subjectId: string
+  student: number | null
+  classAverage: number | null
+  outOf: number
+  min: number | null
+  max: number | null
+}
+
+/** Données lues sur le compte PRONOTE de l'élève, sans donnée inventée. */
+export interface SchoolData {
+  source: 'pronote'
+  syncedAt: string
+  periods: SchoolPeriod[]
+  currentPeriodId: PeriodId | null
+  generalAverage: number | null
+  classGeneralAverage: number | null
+  subjects: Subject[]
+  grades: Grade[]
+  averages: SchoolSubjectAverage[]
+  lessons: Lesson[]
+  homework: Homework[]
+  lifeEvents: LifeEvent[]
+  threads: Thread[]
+  news: NewsItem[]
+  student: {
+    name: string
+    className: string
+    establishment: string
+  }
+}
+
+export interface SchoolError {
+  code: string
+  message: string
+}
+
 export interface PersistedState {
   version: 1
   session: Student | null
+  school: SchoolData | null
+  schoolError: SchoolError | null
   settings: Settings
   homeworkDone: Record<string, boolean>
   readThreads: string[]

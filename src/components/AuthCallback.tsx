@@ -122,8 +122,8 @@ export function AuthCallback({ onFinish }: { onFinish: (destination?: string) =>
                 )}
               </div>
               <p className="auth-callback-note">
-                Les notes et l’emploi du temps affichés restent des données de démonstration : la
-                connexion PRONOTE n’est pas encore autorisée.
+                La connexion OIDC vérifie ton identité. Pour lire les notes, l’emploi du temps et la
+                messagerie, utilise la connexion élève MonLycée qui ouvre aussi ton espace PRONOTE.
               </p>
             </>
           )}

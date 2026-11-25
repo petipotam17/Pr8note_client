@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { ArrowRight, Check, CheckCircle2, Clock, Flame, Lightbulb, ListChecks, Target } from 'lucide-react'
-import { HOMEWORK, SUBJECTS } from '../data/seed'
+import { useSchool } from '../lib/school'
 import type { Homework as HomeworkItem } from '../types'
 import { useStore } from '../lib/store'
 import { homeworkStats, workloadForWeek } from '../lib/analytics'
@@ -28,6 +28,7 @@ function groupOf(item: HomeworkItem): (typeof GROUP_ORDER)[number] {
 
 export function Homework() {
   const { state, toggleHomework } = useStore()
+  const { homework: HOMEWORK, subjects: SUBJECTS, synced } = useSchool()
   const [tab, setTab] = useState<'pending' | 'done' | 'all'>('pending')
   const [subjectFilter, setSubjectFilter] = useState<'all' | string>('all')
 
@@ -40,8 +41,8 @@ export function Homework() {
       HOMEWORK.filter((item) => (subjectFilter === 'all' ? true : item.subjectId === subjectFilter))
         .filter((item) => {
           if (tab === 'all') return true
-          if (tab === 'done') return Boolean(state.homeworkDone[item.id])
-          return !state.homeworkDone[item.id]
+          if (tab === 'done') return Boolean(state.homeworkDone[item.id] || item.done)
+          return !(state.homeworkDone[item.id] || item.done)
         })
         .sort((a, b) => a.due.localeCompare(b.due)),
     [subjectFilter, tab, state.homeworkDone],
@@ -124,7 +125,7 @@ export function Homework() {
                 </header>
                 {group.items.map((item) => {
                   const subject = SUBJECTS.find((entry) => entry.id === item.subjectId)
-                  const isDone = Boolean(state.homeworkDone[item.id])
+                  const isDone = Boolean(state.homeworkDone[item.id] || item.done)
                   const isLate = daysUntil(item.due) < 0 && !isDone
                   return (
                     <article key={item.id} className={`hw-card ${isDone ? 'done' : ''} ${isLate ? 'late' : ''}`}>
@@ -189,9 +190,9 @@ export function Homework() {
             </div>
             <ProgressRing
               value={doneCount}
-              max={total}
+              max={Math.max(1, total)}
               size={142}
-              label={`${Math.round((doneCount / total) * 100)}%`}
+              label={`${total ? Math.round((doneCount / total) * 100) : 0}%`}
               caption="terminé"
             />
             <div className="progress-stats">
@@ -253,8 +254,12 @@ export function Homework() {
           <section className="card mini-cta">
             <CheckCircle2 size={18} />
             <div>
-              <strong>Tout est synchronisé</strong>
-              <p>Tes cases cochées sont enregistrées sur cet appareil.</p>
+              <strong>{synced ? 'Devoirs PRONOTE' : 'Tout est synchronisé'}</strong>
+              <p>
+                {synced
+                  ? 'Les devoirs viennent de PRONOTE ; tes cases cochées restent sur cet appareil.'
+                  : 'Tes cases cochées sont enregistrées sur cet appareil.'}
+              </p>
             </div>
             <ArrowRight size={16} />
           </section>

@@ -8,9 +8,10 @@ import {
   Trophy,
   Target,
 } from 'lucide-react'
-import { DEFAULT_PERIOD, GRADES, PERIODS, SUBJECTS } from '../data/seed'
+import { useSchool } from '../lib/school'
 import type { PeriodId } from '../types'
 import {
+  applySchoolAverages,
   averageDelta,
   estimatedRank,
   generalStats,
@@ -29,19 +30,43 @@ const KIND_LABEL: Record<string, string> = {
 }
 
 export function Grades() {
-  const [period, setPeriod] = useState<PeriodId>(DEFAULT_PERIOD)
+  const {
+    subjects: SUBJECTS,
+    grades: GRADES,
+    averages: AVERAGES,
+    periods: PERIODS,
+    currentPeriodId,
+    previousPeriodId,
+    generalAverage,
+    synced,
+  } = useSchool()
+  const [period, setPeriod] = useState<PeriodId>(currentPeriodId)
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [simSubject, setSimSubject] = useState('maths')
+  const [simSubject, setSimSubject] = useState(() => SUBJECTS[0]?.id ?? '')
   const [simValue, setSimValue] = useState(16)
   const [simCoef, setSimCoef] = useState(2)
 
-  const stats = useMemo(() => generalStats(SUBJECTS, GRADES, period), [period])
-  const otherPeriod = period === 'T2' ? 'T1' : 'T2'
-  const reference = useMemo(() => generalStats(SUBJECTS, GRADES, otherPeriod), [otherPeriod])
+  const stats = useMemo(
+    () => applySchoolAverages(generalStats(SUBJECTS, GRADES, period), AVERAGES, period),
+    [SUBJECTS, GRADES, AVERAGES, period],
+  )
+  const otherPeriod =
+    previousPeriodId && previousPeriodId !== period
+      ? previousPeriodId
+      : PERIODS.find((item) => item.id !== period)?.id ?? null
+  const reference = useMemo(
+    () =>
+      otherPeriod
+        ? applySchoolAverages(generalStats(SUBJECTS, GRADES, otherPeriod), AVERAGES, otherPeriod)
+        : { average: null as number | null },
+    [SUBJECTS, GRADES, AVERAGES, otherPeriod],
+  )
+  const displayedAverage =
+    period === currentPeriodId && generalAverage !== null ? generalAverage : stats.average
   const trend = useMemo(() => gradeTrend(GRADES, period), [period])
-  const rank = estimatedRank(stats.average)
-  const classDelta = averageDelta(stats.average, stats.classAverage)
-  const periodDelta = averageDelta(stats.average, reference.average)
+  const rank = estimatedRank(displayedAverage)
+  const classDelta = averageDelta(displayedAverage, stats.classAverage)
+  const periodDelta = averageDelta(displayedAverage, reference.average)
   const weightedNotes = GRADES.filter((grade) => grade.period === period && grade.value !== null)
 
   const ranked = stats.rows
@@ -81,11 +106,11 @@ export function Grades() {
           <span className="grades-glow" />
           <div className="grades-hero-main">
             <ProgressRing
-              value={stats.average ?? 0}
+              value={displayedAverage ?? 0}
               max={20}
               size={158}
               stroke={12}
-              label={stats.average !== null ? formatGrade(stats.average) : '—'}
+              label={displayedAverage !== null ? formatGrade(displayedAverage) : '—'}
               caption="/ 20"
             />
             <div className="grades-summary">
@@ -93,9 +118,9 @@ export function Grades() {
                 Moyenne générale · {selectedPeriod?.label} {periodDelta && <span className="delta">{periodDelta} pts</span>}
               </p>
               <h2>
-                {stats.average !== null && stats.average >= 16
+                {displayedAverage !== null && displayedAverage >= 16
                   ? 'Excellent trimestre.'
-                  : stats.average !== null && stats.average >= 14
+                  : displayedAverage !== null && displayedAverage >= 14
                     ? 'Une belle dynamique.'
                     : 'Chaque point compte.'}
               </h2>
@@ -320,7 +345,11 @@ export function Grades() {
             )
           })}
         </div>
-        <p className="card-footnote">Moyennes pondérées par coefficient et par matière. Données de démonstration.</p>
+                  <p className="card-footnote">
+            {synced
+              ? 'Notes et moyennes lues directement sur ton compte PRONOTE. Le simulateur reste une estimation locale.'
+              : 'Moyennes pondérées par coefficient et par matière. Données de démonstration.'}
+          </p>
       </section>
     </div>
   )

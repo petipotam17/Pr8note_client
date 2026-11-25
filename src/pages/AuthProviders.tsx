@@ -423,9 +423,8 @@ Merci d’avance.`
           <Info size={17} />
           <p>
             Pr8note est un client indépendant, sans affiliation avec Index Éducation ni MonLycée.net.
-            La connexion élève ouvre une session MonLycée ; les notes, devoirs et emploi du temps
-            restent des données de démonstration tant qu’un connecteur PRONOTE autorisé n’est pas
-            installé.
+            La connexion élève ouvre une session MonLycée, puis lit ton espace PRONOTE pour afficher
+            tes vraies notes, ton emploi du temps, tes devoirs et ta messagerie.
           </p>
         </div>
 

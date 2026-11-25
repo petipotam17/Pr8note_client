@@ -6,6 +6,16 @@
       "name": "index.js",
       "type": "esm",
       "path": "./index.js"
+    },
+    {
+      "name": "rateLimit.js",
+      "type": "esm",
+      "path": "./rateLimit.js"
+    },
+    {
+      "name": "pronote.js",
+      "type": "esm",
+      "path": "./pronote.js"
     }
   ]
 }

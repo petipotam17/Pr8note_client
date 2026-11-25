@@ -1,7 +1,8 @@
-import type { Student } from '../types'
+import type { SchoolData, SchoolError, Student } from '../types'
 
 const PRODUCTION_AUTH_API = 'https://pr8note-auth-tt9qid.freebuff.site'
 const LOCAL_AUTH_API = 'http://127.0.0.1:8787'
+const PRONOTE_URL_KEY = 'pr8note:pronote-url'
 
 /**
  * Le serveur de connexion est séparé du site statique : GitHub Pages ne peut
@@ -18,9 +19,19 @@ export const AUTH_API_URL = getAuthApiUrl()
 
 interface LoginPayload {
   student?: Partial<Student>
+  school?: SchoolData | null
+  schoolError?: SchoolError | null
+  pronoteUrl?: string | null
   verifiedAt?: string
   error?: string
   message?: string
+}
+
+export interface MonlyceeSignInResult {
+  student: Student
+  school: SchoolData | null
+  schoolError: SchoolError | null
+  pronoteUrl: string | null
 }
 
 function isStudent(value: Partial<Student> | undefined): value is Student {
@@ -32,18 +43,48 @@ function isStudent(value: Partial<Student> | undefined): value is Student {
   )
 }
 
+function isSchool(value: unknown): value is SchoolData {
+  if (!value || typeof value !== 'object') return false
+  const school = value as Partial<SchoolData>
+  return (
+    Array.isArray(school.subjects) &&
+    Array.isArray(school.grades) &&
+    Array.isArray(school.lessons) &&
+    Array.isArray(school.homework) &&
+    Array.isArray(school.threads) &&
+    Array.isArray(school.lifeEvents)
+  )
+}
+
+export function loadSavedPronoteUrl(): string {
+  try {
+    return localStorage.getItem(PRONOTE_URL_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function savePronoteUrl(url: string): void {
+  try {
+    if (url.trim()) localStorage.setItem(PRONOTE_URL_KEY, url.trim())
+  } catch {
+    // Le stockage local peut être indisponible (navigation privée).
+  }
+}
+
 export async function signInWithMonlyceePassword(
   username: string,
   password: string,
-): Promise<Student> {
+  pronoteUrl?: string,
+): Promise<MonlyceeSignInResult> {
   const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), 35_000)
+  const timeout = window.setTimeout(() => controller.abort(), 90_000)
 
   try {
     const response = await fetch(`${AUTH_API_URL}/api/monlycee/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, pronoteUrl: pronoteUrl?.trim() || undefined }),
       signal: controller.signal,
       cache: 'no-store',
       credentials: 'omit',
@@ -69,15 +110,28 @@ export async function signInWithMonlyceePassword(
       throw new Error('Le serveur de connexion a renvoyé une réponse incomplète.')
     }
 
+    const school = isSchool(payload.school) ? payload.school : null
+    if (payload.pronoteUrl) savePronoteUrl(payload.pronoteUrl)
+
     return {
-      ...payload.student,
-      authMethod: 'password',
-      authLabel: 'MonLycée.net',
-      subject: payload.student.subject || username,
+      student: {
+        ...payload.student,
+        authMethod: 'password',
+        authLabel: 'MonLycée.net',
+        subject: payload.student.subject || username,
+      },
+      school,
+      schoolError:
+        payload.schoolError && typeof payload.schoolError.message === 'string'
+          ? payload.schoolError
+          : null,
+      pronoteUrl: payload.pronoteUrl ?? null,
     }
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('Le serveur de connexion met trop de temps à répondre. Réessaie.')
+      throw new Error(
+        'La synchronisation PRONOTE met trop de temps à répondre. Réessaie dans quelques instants.',
+      )
     }
     if (error instanceof TypeError) {
       throw new Error(

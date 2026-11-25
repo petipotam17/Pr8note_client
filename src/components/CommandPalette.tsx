@@ -12,7 +12,7 @@ import {
   Sun,
   type LucideIcon,
 } from 'lucide-react'
-import { GRADES, HOMEWORK, RESOURCES, SUBJECTS, THREADS } from '../data/seed'
+import { useSchool } from '../lib/school'
 import { navEntry } from '../lib/paletteData'
 import { useStore } from '../lib/store'
 import { useEscape } from '../lib/hooks'
@@ -30,6 +30,13 @@ interface PaletteEntry {
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate()
   const { state, updateSettings, exportData } = useStore()
+  const {
+    subjects: SUBJECTS,
+    grades: GRADES,
+    homework: HOMEWORK,
+    threads: THREADS,
+    resources: RESOURCES,
+  } = useSchool()
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
 
@@ -126,7 +133,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           item.group.toLowerCase().includes(normalized),
       )
       .slice(0, 12)
-  }, [query, state.settings.theme, updateSettings, exportData])
+  }, [query, state.settings.theme, updateSettings, exportData, GRADES, HOMEWORK, RESOURCES, SUBJECTS, THREADS])
 
   useEffect(() => {
     setActive(0)

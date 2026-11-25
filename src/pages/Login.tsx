@@ -143,8 +143,9 @@ export function Login() {
 
           <h2>Bienvenue dans Pr8note.</h2>
           <p className="login-sub">
-            Connecte-toi avec ton compte élève MonLycée.net. Ton mot de passe sert uniquement à ouvrir
-            ta session. Il n’est pas stocké.
+            Connecte-toi avec ton compte élève MonLycée.net. Pr8note ouvre ensuite ton espace PRONOTE
+            pour lire tes vraies notes, ton emploi du temps, tes devoirs et ta messagerie. Ton mot de
+            passe n’est pas stocké.
           </p>
 
           <div className="login-provider login-student-provider">
@@ -194,7 +195,7 @@ export function Login() {
               <ShieldCheck size={14} /> Mot de passe jamais stocké
             </span>
             <span>
-              <GraduationCap size={14} /> Notes et planning de démonstration
+              <GraduationCap size={14} /> Données PRONOTE réelles
             </span>
           </div>
 

@@ -1,4 +1,4 @@
-import type { Grade, Homework, PeriodId, Subject } from '../types'
+import type { Grade, Homework, PeriodId, SchoolSubjectAverage, Subject } from '../types'
 import { daysUntil, dateAt } from './date'
 
 export interface SubjectStats {
@@ -34,18 +34,64 @@ export function subjectStats(subjectId: string, grades: Grade[], period: PeriodI
   return { subjectId, average, classAverage, count: list.length, evaluated: evaluated.length }
 }
 
-export function generalStats(subjects: Subject[], grades: Grade[], period: PeriodId) {
-  const rows = subjects.map((subject) => ({ subject, ...subjectStats(subject.id, grades, period) }))
+export interface GeneralStats {
+  rows: (SubjectStats & { subject: Subject })[]
+  average: number | null
+  classAverage: number | null
+}
+
+type StatsRow = GeneralStats['rows'][number]
+
+/** Moyennes générale et de classe, pondérées par le coefficient de chaque matière. */
+function summarize(rows: StatsRow[]): GeneralStats {
   const withAverage = rows.filter((row) => row.average !== null)
-  const average = weightedAverage(
-    withAverage.map((row) => ({ value: row.average as number, coef: row.subject.coef })),
+  return {
+    rows,
+    average: weightedAverage(
+      withAverage.map((row) => ({ value: row.average as number, coef: row.subject.coef })),
+    ),
+    classAverage: weightedAverage(
+      withAverage
+        .filter((row) => row.classAverage !== null)
+        .map((row) => ({ value: row.classAverage as number, coef: row.subject.coef })),
+    ),
+  }
+}
+
+export function generalStats(subjects: Subject[], grades: Grade[], period: PeriodId): GeneralStats {
+  return summarize(
+    subjects.map((subject) => ({ subject, ...subjectStats(subject.id, grades, period) })),
   )
-  const classAverage = weightedAverage(
-    withAverage
-      .filter((row) => row.classAverage !== null)
-      .map((row) => ({ value: row.classAverage as number, coef: row.subject.coef })),
+}
+
+/**
+ * Remplace les moyennes recalculées localement par celles publiées par PRONOTE
+ * pour la période affichée. Les notes listées peuvent être incomplètes (note
+ * masquée, absence) : la moyenne officielle de la matière fait foi.
+ */
+export function applySchoolAverages(
+  stats: GeneralStats,
+  averages: SchoolSubjectAverage[],
+  period: PeriodId,
+): GeneralStats {
+  const reported = new Map(
+    averages
+      .filter((average) => average.period === period)
+      .map((average) => [average.subjectId, average]),
   )
-  return { rows, average, classAverage }
+  if (!reported.size) return stats
+
+  const rows = stats.rows.map((row) => {
+    const source = reported.get(row.subject.id)
+    if (!source) return row
+    const scale = source.outOf > 0 ? 20 / source.outOf : 1
+    return {
+      ...row,
+      average: source.student === null ? row.average : source.student * scale,
+      classAverage: source.classAverage === null ? row.classAverage : source.classAverage * scale,
+    }
+  })
+  return summarize(rows)
 }
 
 export function rankedSubjects(subjects: Subject[], grades: Grade[], period: PeriodId): SubjectStats[] {
@@ -93,8 +139,9 @@ export interface HomeworkStats {
 }
 
 export function homeworkStats(homework: Homework[], doneMap: Record<string, boolean>): HomeworkStats {
-  const pending = homework.filter((item) => !doneMap[item.id])
-  const done = homework.filter((item) => doneMap[item.id])
+  const isDone = (item: Homework) => Boolean(doneMap[item.id] || item.done)
+  const pending = homework.filter((item) => !isDone(item))
+  const done = homework.filter((item) => isDone(item))
   const late = pending.filter((item) => daysUntil(item.due) < 0)
   const today = pending.filter((item) => daysUntil(item.due) === 0)
   return {

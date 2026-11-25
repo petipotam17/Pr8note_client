@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react'
-import type { PersistedState, Settings, Student, Thread } from '../types'
+import type { PersistedState, SchoolData, SchoolError, Settings, Student, Thread } from '../types'
 import { STUDENT, THREADS } from '../data/seed'
 import { applyTheme, DEFAULT_SETTINGS } from './theme'
 
@@ -26,7 +26,7 @@ export interface Toast {
 interface StoreValue {
   state: PersistedState
   toasts: Toast[]
-  signIn: (student?: Student) => void
+  signIn: (student?: Student, school?: SchoolData | null, schoolError?: SchoolError | null) => void
   signOut: () => void
   toggleHomework: (id: string) => void
   markRead: (id: string) => void
@@ -54,6 +54,8 @@ function createInitialState(): PersistedState {
   return {
     version: 1,
     session: null,
+    school: null,
+    schoolError: null,
     settings: { ...DEFAULT_SETTINGS },
     homeworkDone: {},
     readThreads: THREADS.filter((thread) => !thread.unread).map((thread) => thread.id),
@@ -76,6 +78,9 @@ function loadState(): PersistedState {
       ...base,
       ...parsed,
       version: 1,
+      school: parsed.school && typeof parsed.school === 'object' ? parsed.school : null,
+      schoolError:
+        parsed.schoolError && typeof parsed.schoolError === 'object' ? parsed.schoolError : null,
       settings: { ...base.settings, ...(parsed.settings ?? {}) },
       homeworkDone: { ...(parsed.homeworkDone ?? {}) },
       readThreads: Array.isArray(parsed.readThreads) ? parsed.readThreads : base.readThreads,
@@ -129,19 +134,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => map.forEach((timer) => window.clearTimeout(timer))
   }, [])
 
-  const signIn = useCallback((student: Student = STUDENT) => {
-    setState((prev) => ({
-      ...prev,
-      session: {
-        ...student,
-        authMethod: student.authMethod ?? 'demo',
-        authLabel: student.authLabel ?? 'Démonstration',
-      },
-    }))
-  }, [])
+  const signIn = useCallback(
+    (student: Student = STUDENT, school: SchoolData | null = null, schoolError: SchoolError | null = null) => {
+      setState((prev) => ({
+        ...prev,
+        session: {
+          ...student,
+          authMethod: student.authMethod ?? 'demo',
+          authLabel: student.authLabel ?? 'Démonstration',
+        },
+        school: school ?? null,
+        schoolError: schoolError ?? null,
+      }))
+    },
+    [],
+  )
 
   const signOut = useCallback(() => {
-    setState((prev) => ({ ...prev, session: null }))
+    setState((prev) => ({ ...prev, session: null, school: null, schoolError: null }))
   }, [])
 
   const toggleHomework = useCallback((id: string) => {

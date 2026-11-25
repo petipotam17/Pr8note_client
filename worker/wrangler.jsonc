@@ -2,5 +2,12 @@
   // Configuration locale uniquement : le déploiement passe par Sites.
   "name": "pr8note-auth",
   "main": "index.js",
-  "compatibility_date": "2025-10-01"
+  "compatibility_date": "2025-10-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pr8note-auth-db",
+      "database_id": "411d5ebe-d6c8-4357-8328-5c2e5b9fc7d9"
+    }
+  ]
 }

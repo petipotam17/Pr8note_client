@@ -19,7 +19,7 @@ import {
   Sun,
   type LucideIcon,
 } from 'lucide-react'
-import { GRADES, HOMEWORK, SUBJECTS, THREADS } from '../data/seed'
+import { useSchool } from '../lib/school'
 import { useStore } from '../lib/store'
 import { NAV } from '../lib/nav'
 import { daysUntil, formatTimeAgo, relativeDue } from '../lib/date'
@@ -46,7 +46,12 @@ export function Layout() {
 
   const student = state.session!
   const verifiedConnection = student.authMethod === 'oidc' || student.authMethod === 'password'
-  const unreadMessages = THREADS.filter((thread) => !state.readThreads.includes(thread.id)).length
+  const { subjects: SUBJECTS, grades: GRADES, homework: HOMEWORK, threads: THREADS, synced, syncedAt } =
+    useSchool()
+  const unreadMessages = THREADS.filter(
+    (thread) => thread.unread && !state.readThreads.includes(thread.id),
+  ).length
+  const syncBlocked = verifiedConnection && !synced && location.pathname !== '/reglages'
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -84,7 +89,9 @@ export function Layout() {
       })
     }
 
-    const unread = THREADS.filter((thread) => !state.readThreads.includes(thread.id)).slice(0, 2)
+    const unread = THREADS.filter(
+      (thread) => thread.unread && !state.readThreads.includes(thread.id),
+    ).slice(0, 2)
     unread.forEach((thread) => {
       list.push({
         id: `thread-${thread.id}`,
@@ -123,7 +130,7 @@ export function Layout() {
     }
 
     return list.slice(0, 4)
-  }, [state])
+  }, [state, GRADES, HOMEWORK, SUBJECTS, THREADS])
 
   const toggleTheme = () => updateSettings({ theme: state.settings.theme === 'dark' ? 'light' : 'dark' })
 
@@ -354,19 +361,52 @@ export function Layout() {
         </header>
 
         <main className="content">
-          {verifiedConnection && (
+          {verifiedConnection && synced && (
             <div className="demo-banner">
               <ShieldCheck size={15} />
               <span>
-                <strong>{student.authLabel ?? 'Connexion vérifiée'}.</strong>{' '}
-                {student.authMethod === 'password'
-                  ? 'Ta session est ouverte ; les notes, devoirs et l’emploi du temps restent des données de démonstration.'
-                  : 'Ton identité est vérifiée ; les notes, devoirs et l’emploi du temps restent des données de démonstration.'}
+                <strong>PRONOTE synchronisé.</strong>{' '}
+                {syncedAt
+                  ? `Notes, emploi du temps, devoirs et messagerie lus sur ton compte le ${new Date(
+                      syncedAt,
+                    ).toLocaleString('fr-FR', {
+                      day: 'numeric',
+                      month: 'long',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}.`
+                  : 'Notes, emploi du temps, devoirs et messagerie lus sur ton compte.'}
               </span>
               <Link to="/connexion">Gérer</Link>
             </div>
           )}
-          <Outlet />
+          {syncBlocked ? (
+            <div className="page">
+              <section className="card" style={{ maxWidth: 620, margin: '8vh auto', textAlign: 'center' }}>
+                <span className="auth-callback-icon error" style={{ margin: '0 auto 14px' }}>
+                  <ShieldCheck size={28} />
+                </span>
+                <h1 style={{ marginBottom: 8 }}>Tes données PRONOTE ne sont pas encore accessibles.</h1>
+                <p style={{ color: 'var(--text-soft)', marginBottom: 18 }}>
+                  {state.schoolError?.message ??
+                    'La connexion à PRONOTE n’a pas pu aboutir. Vérifie l’adresse PRONOTE de ton lycée et réessaie.'}
+                </p>
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                  <Link to="/connexion" className="btn btn-primary">
+                    <ShieldCheck size={15} /> Rouvrir la connexion
+                  </Link>
+                  <button type="button" className="btn btn-ghost" onClick={signOut}>
+                    <LogOut size={15} /> Se déconnecter
+                  </button>
+                </div>
+                <p style={{ color: 'var(--text-soft)', fontSize: 13, marginTop: 16 }}>
+                  Aucune donnée de démonstration n’est affichée à la place de tes vraies données.
+                </p>
+              </section>
+            </div>
+          ) : (
+            <Outlet />
+          )}
         </main>
 
         <nav className="tabbar" aria-label="Navigation mobile">

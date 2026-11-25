@@ -8,23 +8,24 @@ import {
   PenLine,
   Search,
   Send,
+  ShieldCheck,
   Star,
   MessagesSquare,
 } from 'lucide-react'
-import { SUBJECTS, THREADS } from '../data/seed'
+import { useSchool } from '../lib/school'
 import type { Thread } from '../types'
 import { useStore } from '../lib/store'
 import { formatDateTime, formatTimeAgo } from '../lib/date'
 import { Avatar, Badge, EmptyState, Modal, PageHeader } from '../components/ui'
 
-const RECIPIENTS = Array.from(
-  new Set(['Vie scolaire', 'Secrétariat', 'Direction', ...SUBJECTS.map((subject) => subject.teacher)]),
-)
-
 const EMPTY_COMPOSE = { to: 'Vie scolaire', subject: '', body: '' }
 
 export function Messages() {
   const { state, markRead, addReply, toggleStar, sendThread, toast } = useStore()
+  const { threads: THREADS, subjects: SUBJECTS, synced } = useSchool()
+  const recipients = Array.from(
+    new Set(['Vie scolaire', 'Secrétariat', 'Direction', ...SUBJECTS.map((subject) => subject.teacher)]),
+  )
   const [tab, setTab] = useState<'inbox' | 'sent'>('inbox')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -32,8 +33,13 @@ export function Messages() {
   const [composeOpen, setComposeOpen] = useState(false)
   const [compose, setCompose] = useState(EMPTY_COMPOSE)
 
-  const allThreads = useMemo(() => [...THREADS, ...state.sentThreads], [state.sentThreads])
-  const unreadCount = THREADS.filter((thread) => !state.readThreads.includes(thread.id)).length
+  const allThreads = useMemo(
+    () => (synced ? THREADS : [...THREADS, ...state.sentThreads]),
+    [THREADS, state.sentThreads, synced],
+  )
+  const unreadCount = THREADS.filter(
+    (thread) => thread.unread && !state.readThreads.includes(thread.id),
+  ).length
 
   const list = useMemo(() => {
     const base = allThreads.filter((thread) => thread.folder === tab)
@@ -52,7 +58,7 @@ export function Messages() {
   const selected: Thread | null = allThreads.find((thread) => thread.id === selectedId) ?? null
   const replies = selected ? state.replies[selected.id] ?? [] : []
   const isUnread = (thread: Thread) =>
-    thread.folder === 'inbox' && !state.readThreads.includes(thread.id)
+    thread.folder === 'inbox' && thread.unread && !state.readThreads.includes(thread.id)
   const isStarred = (thread: Thread) => state.starredThreads.includes(thread.id)
 
   const openThread = (thread: Thread) => {
@@ -84,13 +90,23 @@ export function Messages() {
   return (
     <div className="page messages-page">
       <PageHeader
-        eyebrow="Messagerie"
+        eyebrow={synced ? 'Messagerie PRONOTE' : 'Messagerie'}
         title="Tes échanges"
-        description={`${unreadCount} message${unreadCount > 1 ? 's' : ''} non lu${unreadCount > 1 ? 's' : ''} · réponses et nouveaux messages conservés sur cet appareil.`}
+        description={
+          synced
+            ? `${unreadCount} message${unreadCount > 1 ? 's' : ''} non lu${unreadCount > 1 ? 's' : ''} · conversations lues sur ton compte PRONOTE.`
+            : `${unreadCount} message${unreadCount > 1 ? 's' : ''} non lu${unreadCount > 1 ? 's' : ''} · réponses et nouveaux messages conservés sur cet appareil.`
+        }
         actions={
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => setComposeOpen(true)}>
-            <PenLine size={15} /> Nouveau message
-          </button>
+          synced ? (
+            <Badge tone="neutral">
+              <ShieldCheck size={12} /> Lecture seule
+            </Badge>
+          ) : (
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setComposeOpen(true)}>
+              <PenLine size={15} /> Nouveau message
+            </button>
+          )
         }
       />
 
@@ -246,18 +262,29 @@ export function Messages() {
                 )}
               </div>
 
-              <form className="reply-box" onSubmit={handleReply}>
-                <textarea
-                  rows={2}
-                  value={reply}
-                  onChange={(event) => setReply(event.target.value)}
-                  placeholder="Écrire une réponse…"
-                  aria-label="Réponse"
-                />
-                <button type="submit" className="btn btn-primary" disabled={!reply.trim()}>
-                  <Send size={15} /> Envoyer
-                </button>
-              </form>
+              {synced ? (
+                <div className="reply-box reply-readonly">
+                  <ShieldCheck size={16} />
+                  <p>
+                    Cette conversation vient de PRONOTE. L’envoi de messages depuis Pr8note n’est pas
+                    encore disponible : réponds depuis ton espace PRONOTE pour que la réponse soit bien
+                    transmise.
+                  </p>
+                </div>
+              ) : (
+                <form className="reply-box" onSubmit={handleReply}>
+                  <textarea
+                    rows={2}
+                    value={reply}
+                    onChange={(event) => setReply(event.target.value)}
+                    placeholder="Écrire une réponse…"
+                    aria-label="Réponse"
+                  />
+                  <button type="submit" className="btn btn-primary" disabled={!reply.trim()}>
+                    <Send size={15} /> Envoyer
+                  </button>
+                </form>
+              )}
             </>
           ) : (
             <div className="message-empty">
@@ -302,7 +329,7 @@ export function Messages() {
             value={compose.to}
             onChange={(event) => setCompose((value) => ({ ...value, to: event.target.value }))}
           >
-            {RECIPIENTS.map((recipient) => (
+            {recipients.map((recipient) => (
               <option key={recipient} value={recipient}>
                 {recipient}
               </option>

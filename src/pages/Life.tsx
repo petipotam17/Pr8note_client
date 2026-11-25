@@ -11,7 +11,7 @@ import {
   StickyNote,
   UserCheck,
 } from 'lucide-react'
-import { LIFE_EVENTS, SUBJECTS } from '../data/seed'
+import { useSchool } from '../lib/school'
 import { useStore } from '../lib/store'
 import { formatDateShort, formatMinutes } from '../lib/date'
 import { Badge, PageHeader, ProgressRing } from '../components/ui'
@@ -24,13 +24,14 @@ const TYPE_META = {
 } as const
 
 export function Life() {
-  const { state, justify, toast } = useStore()
+  const { state } = useStore()
+  const { lifeEvents: LIFE_EVENTS, subjects: SUBJECTS, synced } = useSchool()
   const events = LIFE_EVENTS.slice().sort((a, b) => b.date.localeCompare(a.date))
   const absences = events.filter((event) => event.type === 'absence')
   const late = events.filter((event) => event.type === 'retard')
   const sanctions = events.filter((event) => event.type === 'sanction')
 
-  const justified = (eventId: string, base: boolean) => base || state.justified.includes(eventId)
+  const justified = (eventId: string, base: boolean) => base || (!synced && state.justified.includes(eventId))
   const missingProof = events.filter((event) => !justified(event.id, event.justified) && event.type !== 'note')
   const absenceHours = absences.reduce((sum, event) => sum + (event.durationHours ?? 0), 0)
   const attendance = Math.round(Math.max(0, 100 - absenceHours * 0.7))
@@ -141,17 +142,8 @@ export function Life() {
                       <Badge tone={isJustified ? 'good' : 'warn'}>
                         {isJustified ? 'Justifié' : 'En attente de justificatif'}
                       </Badge>
-                      {!isJustified && event.type !== 'note' && (
-                        <button
-                          type="button"
-                          className="link-btn"
-                          onClick={() => {
-                            justify(event.id)
-                            toast('Justificatif transmis à la vie scolaire (démo).', 'success')
-                          }}
-                        >
-                          Justifier maintenant
-                        </button>
+                      {!isJustified && event.type !== 'note' && !synced && (
+                        <span className="mini-tag">Justificatif à transmettre</span>
                       )}
                     </div>
                   </div>
@@ -186,8 +178,9 @@ export function Life() {
               </div>
             </div>
             <p className="attendance-note">
-              Une absence justifiée sous 48 h n’a aucun impact sur ton dossier. Pense à transmettre tes
-              certificats.
+              {synced
+                ? 'Ces absences et retards sont lus sur ton compte PRONOTE. Les justificatifs se transmettent auprès de la vie scolaire.'
+                : 'Une absence justifiée sous 48 h n’a aucun impact sur ton dossier. Pense à transmettre tes certificats.'}
             </p>
           </section>
 
@@ -199,7 +192,7 @@ export function Life() {
               </span>
               <div>
                 <strong>Vie scolaire</strong>
-                <p>Ouverte de 7 h 45 à 17 h 30, sauf mercredi après-midi.</p>
+                <p>Horaires et bureau disponibles auprès de ton établissement.</p>
               </div>
             </div>
             <div className="info-row">
@@ -207,8 +200,8 @@ export function Life() {
                 <MapPin size={15} />
               </span>
               <div>
-                <strong>Bureau B03</strong>
-                <p>Aile administrative, à côté de la salle des professeurs.</p>
+                <strong>Établissement</strong>
+                <p>{state.session?.establishment || 'Non renseigné'}</p>
               </div>
             </div>
             <div className="info-row">

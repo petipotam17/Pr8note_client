@@ -12,7 +12,7 @@ import {
   Sparkles,
   TrendingUp,
 } from 'lucide-react'
-import { GRADES, HOMEWORK, LESSONS, NEWS, SUBJECTS } from '../data/seed'
+import { useSchool } from '../lib/school'
 import { useStore } from '../lib/store'
 import { useNow } from '../lib/hooks'
 import { generalStats, averageDelta, homeworkStats, workloadForWeek } from '../lib/analytics'
@@ -48,14 +48,26 @@ interface Upcoming {
 
 export function Dashboard() {
   const { state, toggleHomework } = useStore()
+  const {
+    subjects: SUBJECTS,
+    grades: GRADES,
+    homework: HOMEWORK,
+    lessons: LESSONS,
+    news: NEWS,
+    lifeEvents: LIFE_EVENTS,
+    currentPeriodId,
+    previousPeriodId,
+    generalAverage,
+  } = useSchool()
   const now = useNow(15_000)
   const student = state.session!
   const minutesNow = now.getHours() * 60 + now.getMinutes()
   const todayIndex = weekdayIndex(now)
+  const today = isoDate(now)
 
-  const todayLessons = LESSONS.filter((lesson) => lesson.weekday === todayIndex).sort((a, b) =>
-    a.start.localeCompare(b.start),
-  )
+  const todayLessons = LESSONS.filter((lesson) =>
+    lesson.date ? lesson.date === today : lesson.weekday === todayIndex,
+  ).sort((a, b) => a.start.localeCompare(b.start))
   const activeLessons = todayLessons.filter((lesson) => lesson.status !== 'canceled')
   const current = activeLessons.find((lesson) => {
     const start = timeToMinutes(lesson.start)
@@ -67,9 +79,11 @@ export function Dashboard() {
   for (let offset = 0; offset < 8 && !upcoming; offset += 1) {
     const date = addDays(now, offset)
     const day = weekdayIndex(date)
-    const lessons = LESSONS.filter((lesson) => lesson.weekday === day && lesson.status !== 'canceled').sort((a, b) =>
-      a.start.localeCompare(b.start),
-    )
+    const lessons = LESSONS.filter((lesson) =>
+      lesson.date
+        ? lesson.date === isoDate(date) && lesson.status !== 'canceled'
+        : lesson.weekday === day && lesson.status !== 'canceled',
+    ).sort((a, b) => a.start.localeCompare(b.start))
     for (const lesson of lessons) {
       const startAbs = offset * 1440 + timeToMinutes(lesson.start)
       if (startAbs > minutesNow) {
@@ -94,15 +108,20 @@ export function Dashboard() {
       )
     : 0
 
-  const general = generalStats(SUBJECTS, GRADES, 'T2')
-  const previous = generalStats(SUBJECTS, GRADES, 'T1')
-  const gradeDelta = averageDelta(general.average, previous.average)
+  const general = generalStats(SUBJECTS, GRADES, currentPeriodId)
+  const previous = previousPeriodId
+    ? generalStats(SUBJECTS, GRADES, previousPeriodId)
+    : { average: null as number | null }
+  const displayedAverage = generalAverage ?? general.average
+  const gradeDelta = averageDelta(displayedAverage, previous.average)
   const homework = homeworkStats(HOMEWORK, state.homeworkDone)
   const pendingSorted = homework.pending.slice().sort((a, b) => a.due.localeCompare(b.due))
-  const dueToday = HOMEWORK.filter((item) => !state.homeworkDone[item.id] && daysUntil(item.due) === 0).length
+  const dueToday = HOMEWORK.filter(
+    (item) => !state.homeworkDone[item.id] && !item.done && daysUntil(item.due) === 0,
+  ).length
   const late = homework.late.length
   const doneCount = HOMEWORK.length - homework.pending.length
-  const donePercent = Math.round((doneCount / HOMEWORK.length) * 100)
+  const donePercent = HOMEWORK.length ? Math.round((doneCount / HOMEWORK.length) * 100) : 0
   const todayHours = Math.round(
     activeLessons.reduce((sum, lesson) => sum + (timeToMinutes(lesson.end) - timeToMinutes(lesson.start)), 0) / 60,
   )
@@ -112,8 +131,10 @@ export function Dashboard() {
     .slice(0, 3)
   const weekWorkload = workloadForWeek(homework.pending)
   const maxWorkload = Math.max(60, ...weekWorkload.map((day) => day.minutes))
-  const absenceHours = 6
-  const attendance = Math.round(Math.max(0, 100 - absenceHours * 0.7))
+  const absenceHours = LIFE_EVENTS.filter((event) => event.type === 'absence').reduce(
+    (sum, event) => sum + (event.durationHours ?? 0),
+    0,
+  )
 
   const subtitle = [
     activeLessons.length ? `${activeLessons.length} cours aujourd’hui` : 'Pas de cours aujourd’hui',
@@ -199,7 +220,7 @@ export function Dashboard() {
             <div>
               <span>Moyenne générale</span>
               <strong>
-                {general.average !== null ? formatGrade(general.average) : '—'}
+                {displayedAverage !== null ? formatGrade(displayedAverage) : '—'}
                 <small>/20</small>
               </strong>
             </div>
@@ -215,10 +236,10 @@ export function Dashboard() {
               </strong>
             </div>
             <div>
-              <span>Assiduité</span>
+              <span>Heures d’absence</span>
               <strong>
-                {attendance}
-                <small>%</small>
+                {absenceHours.toLocaleString('fr-FR', { maximumFractionDigits: 1 })}
+                <small>h</small>
               </strong>
             </div>
           </div>
@@ -230,9 +251,11 @@ export function Dashboard() {
               <p className="eyebrow">Cette semaine</p>
               <h2>Ta progression</h2>
             </div>
-            <Badge tone="good">
-              <TrendingUp size={12} /> {gradeDelta ?? '+0,0'} pts
-            </Badge>
+            {gradeDelta !== null && (
+              <Badge tone={gradeDelta.startsWith('+') ? 'good' : 'warn'}>
+                <TrendingUp size={12} /> {gradeDelta} pts
+              </Badge>
+            )}
           </div>
           <div className="week-ring">
             <ProgressRing
@@ -422,10 +445,16 @@ export function Dashboard() {
               <h2>Actualités</h2>
             </div>
             <Badge tone="neutral">
-              <GraduationCap size={12} /> Victor Hugo
+              <GraduationCap size={12} /> {student.establishment}
             </Badge>
           </div>
           <div className="news-list">
+            {NEWS.length === 0 && (
+              <div className="soft-empty">
+                <GraduationCap size={22} />
+                <p>Aucune actualité publiée pour le moment.</p>
+              </div>
+            )}
             {NEWS.map((item) => (
               <article key={item.id} className="news-item">
                 <span className="news-emoji" style={{ background: `${item.color}1a`, color: item.color }}>

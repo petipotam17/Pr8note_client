@@ -11,7 +11,7 @@ import {
   Star,
   type LucideIcon,
 } from 'lucide-react'
-import { RESOURCES, SUBJECTS } from '../data/seed'
+import { useSchool } from '../lib/school'
 import type { Resource } from '../types'
 import { useStore } from '../lib/store'
 import { Badge, EmptyState, Modal, PageHeader } from '../components/ui'
@@ -33,6 +33,7 @@ const FILTERS: { value: Resource['type'] | 'all'; label: string }[] = [
 
 export function Resources() {
   const { state, toggleFavorite, toast } = useStore()
+  const { resources: RESOURCES, subjects: SUBJECTS, synced } = useSchool()
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<Resource['type'] | 'all'>('all')
   const [favoritesOnly, setFavoritesOnly] = useState(false)
@@ -139,24 +140,30 @@ export function Resources() {
         </div>
       ) : (
         <div className="card">
-          <EmptyState
-            icon={<Library size={26} />}
-            title="Aucune ressource trouvée"
-            description="Essaie un autre filtre ou un autre mot-clé."
-            action={
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => {
-                  setSearch('')
-                  setTypeFilter('all')
-                  setFavoritesOnly(false)
-                }}
-              >
-                Réinitialiser les filtres
-              </button>
-            }
-          />
+                      <EmptyState
+              icon={<Library size={26} />}
+              title={synced ? 'Ressources non synchronisées' : 'Aucune ressource trouvée'}
+              description={
+                synced
+                  ? 'Les documents joints à tes cours et devoirs PRONOTE ne sont pas encore récupérés par Pr8note.'
+                  : 'Essaie un autre filtre ou un autre mot-clé.'
+              }
+              action={
+                synced ? undefined : (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => {
+                      setSearch('')
+                      setTypeFilter('all')
+                      setFavoritesOnly(false)
+                    }}
+                  >
+                    Réinitialiser les filtres
+                  </button>
+                )
+              }
+            />
         </div>
       )}
 

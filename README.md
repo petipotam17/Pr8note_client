@@ -99,9 +99,9 @@ La connexion par mot de passe est une solution de repli indépendante, sans affi
 
 ## 🔐 À propos des données
 
-Pr8note fonctionne avec un **espace de démonstration complet** : données fictives, aucune synchronisation PRONOTE. La connexion élève ouvre une session MonLycée et vérifie l’identité, mais PRONOTE reste un logiciel propriétaire d’Index Éducation ; toute récupération réelle de notes ou d’emploi du temps nécessitera l’autorisation et le connecteur de l’établissement.
+Après la connexion MonLycée, Pr8note ouvre l’Espace élève PRONOTE avec la session du portail et lit directement les notes, les professeurs, l’emploi du temps, les devoirs, les absences, la messagerie et les actualités de l’élève. Le mot de passe est utilisé uniquement pendant la requête : il n’est ni stocké ni journalisé. Aucune donnée de démonstration n’est affichée à la place de données réelles ; si PRONOTE refuse l’accès, l’application l’indique clairement.
 
-Les devoirs cochés, messages lus, réponses, favoris et réglages sont stockés dans le navigateur (localStorage). L’export JSON permet de les sauvegarder et de les réimporter.
+PRONOTE reste un logiciel propriétaire d’Index Éducation ; Pr8note est un client indépendant, sans affiliation avec l’éditeur ni avec MonLycée.net. Les données récupérées sont conservées dans le navigateur (localStorage), comme les devoirs cochés, messages lus, favoris et réglages. L’export JSON permet de les sauvegarder et de les réimporter.
 
 ## ⚠️ Indépendance
 

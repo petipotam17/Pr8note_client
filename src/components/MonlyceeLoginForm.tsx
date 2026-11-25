@@ -11,7 +11,7 @@ import {
   UserRound,
 } from 'lucide-react'
 import { MONLYCEE_LOGIN_URL, MONLYCEE_NAME } from '../lib/auth'
-import { signInWithMonlyceePassword } from '../lib/monlyceeApi'
+import { loadSavedPronoteUrl, signInWithMonlyceePassword } from '../lib/monlyceeApi'
 import { useStore } from '../lib/store'
 
 interface MonlyceeLoginFormProps {
@@ -25,6 +25,7 @@ export function MonlyceeLoginForm({ compact = false, showProviderLink = true }: 
   const formId = useId()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [pronoteUrl, setPronoteUrl] = useState(() => loadSavedPronoteUrl())
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -41,10 +42,16 @@ export function MonlyceeLoginForm({ compact = false, showProviderLink = true }: 
     setError('')
     setSubmitting(true)
     try {
-      const student = await signInWithMonlyceePassword(login, password)
+      const result = await signInWithMonlyceePassword(login, password, pronoteUrl)
       setPassword('')
-      signIn(student)
-      toast(`Connexion MonLycée réussie. Bienvenue ${student.firstName} !`, 'success')
+      signIn(result.student, result.school, result.schoolError)
+      if (result.school) {
+        toast(`Connecté à PRONOTE. Bienvenue ${result.student.firstName} !`, 'success')
+      } else if (result.schoolError) {
+        toast(result.schoolError.message, 'error')
+      } else {
+        toast(`Connexion MonLycée réussie. Bienvenue ${result.student.firstName} !`, 'success')
+      }
       navigate('/')
     } catch (caught) {
       setError(
@@ -70,7 +77,7 @@ export function MonlyceeLoginForm({ compact = false, showProviderLink = true }: 
         </span>
         <div className="auth-provider-title">
           <h2>Ton compte élève {MONLYCEE_NAME}</h2>
-          <p>Sans administrateur · identifiant et mot de passe MonLycée</p>
+          <p>Sans administrateur · notes, devoirs et emploi du temps réels</p>
         </div>
         <span className="auth-student-lock" title="Connexion traitée par le serveur Pr8note">
           <LockKeyhole size={15} />
@@ -131,6 +138,33 @@ export function MonlyceeLoginForm({ compact = false, showProviderLink = true }: 
         </div>
       </div>
 
+      <details className="auth-form-help auth-pronote-help" open={!pronoteUrl}>
+        <summary>
+          <Info size={13} /> Adresse PRONOTE de ton lycée {pronoteUrl ? '· renseignée' : '· recommandée'}
+        </summary>
+        <div className="auth-field">
+          <label htmlFor={`${formId}-pronote`}>Espace élève PRONOTE</label>
+          <div className="auth-input-wrap">
+            <input
+              id={`${formId}-pronote`}
+              type="url"
+              inputMode="url"
+              autoComplete="url"
+              spellCheck={false}
+              placeholder="https://0751234A.index-education.net/pronote/eleve.html"
+              value={pronoteUrl}
+              onChange={(event) => setPronoteUrl(event.target.value)}
+              disabled={submitting}
+            />
+          </div>
+          <p>
+            Ouvre PRONOTE depuis ton ENT, puis copie l’adresse de la page dans ton navigateur.
+            Elle permet à Pr8note de lire tes vraies notes, ton emploi du temps, tes devoirs et ta
+            messagerie. Laisse vide si tu ne la connais pas : Pr8note essaie de la trouver seul.
+          </p>
+        </div>
+      </details>
+
       {error && (
         <p className="auth-form-error" role="alert">
           <Info size={14} />
@@ -146,8 +180,8 @@ export function MonlyceeLoginForm({ compact = false, showProviderLink = true }: 
       <p className="auth-form-notice">
         <ShieldCheck size={14} />
         <span>
-          Ton mot de passe est envoyé à notre serveur <strong>uniquement pour ouvrir ta session</strong>{' '}
-          MonLycée. Il n’est ni stocké ni journalisé.
+          Ton mot de passe est envoyé à notre serveur <strong>uniquement pour ouvrir ta session</strong>{" "}
+          MonLycée et PRONOTE. Il n’est ni stocké ni journalisé.
         </span>
       </p>
 
@@ -158,8 +192,9 @@ export function MonlyceeLoginForm({ compact = false, showProviderLink = true }: 
         <p>
           {MONLYCEE_NAME} ne permet pas encore à un site externe de récupérer ta session sans qu’un
           administrateur de l’ENT crée un client OIDC. Cette méthode utilise donc ton compte élève
-          directement, sans passer par l’administrateur. Si tu préfères ne pas saisir ton mot de passe
-          ici, tu peux ouvrir le portail officiel et revenir manuellement.
+          directement, sans passer par l’administrateur, puis ouvre PRONOTE avec la même session pour
+          lire tes données réelles. Si tu préfères ne pas saisir ton mot de passe ici, tu peux ouvrir le
+          portail officiel et revenir manuellement.
         </p>
       </details>
 
