@@ -77,7 +77,8 @@ export function describePronoteError(error) {
  *
  *   E1 adresse fournie invalide
  *   E2 redirection hors ENT/PRONOTE
- *   E3 réseau ou délai dépassé
+ *   E3-N hôte PRONOTE injoignable (DNS, TLS, connexion refusée)
+ *   E3-T délai dépassé en attendant PRONOTE
  *   E4 trop de redirections
  *   E5 PRONOTE a refusé la session
  *   E6 MonLycée n'a pas transmis la session PRONOTE
@@ -372,13 +373,16 @@ async function fetchWithJar(url, init, jar, options) {
       })
     } catch (error) {
       const aborted = error instanceof Error && error.name === 'AbortError'
+      // Deux causes très différentes : un hôte qui ne résout pas ou refuse la
+      // connexion (E3-N) n'est pas un PRONOTE lent (E3-T). Les distinguer
+      // évite d'augmenter les délais quand le problème est l'adresse.
       throw new PronoteError(
         aborted ? 'PRONOTE_TIMEOUT' : 'PRONOTE_NETWORK',
         aborted
           ? 'PRONOTE met trop de temps à répondre. Réessaie dans quelques instants.'
           : 'Impossible de joindre PRONOTE pour le moment. Réessaie dans quelques instants.',
         502,
-        'E3',
+        aborted ? 'E3-T' : 'E3-N',
       )
     } finally {
       clearTimeout(timer)

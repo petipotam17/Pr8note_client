@@ -167,3 +167,37 @@ test('l’identité accepte une charge utile imbriquée', () => {
   assert.equal(student.className, 'Première 2')
   assert.equal(student.establishment, 'Lycée Jean Moulin')
 })
+
+test('un échec réseau sur la première adresse essaie la suivante', async () => {
+  const base = mockFetch()
+  const pronoteCalls = []
+  const fetchImpl = async (url, init = {}) => {
+    const target = String(url)
+    if (target.includes('index-education.net')) {
+      pronoteCalls.push(target)
+      throw new TypeError('fetch failed')
+    }
+    if (target === 'https://psn.monlycee.net/') {
+      return response(200, {
+        body: `<html><body>
+          <a href="https://0751234a.index-education.net/pronote/parent.html">PRONOTE</a>
+          <span>0751234A</span>
+        </body></html>`,
+      })
+    }
+    return base.fetchImpl(url, init)
+  }
+
+  const result = await loginToMonlycee('camille.durand', 'secret', {
+    fetchImpl,
+    startUrl: START,
+  })
+
+  assert.equal(result.school, null)
+  assert.equal(result.schoolError.stage, 'E3-N')
+  assert.match(result.schoolError.message, /2 adresses essayées/)
+  assert.ok(
+    pronoteCalls.length >= 2,
+    `une seule adresse essayée : ${pronoteCalls.join(', ')}`,
+  )
+})

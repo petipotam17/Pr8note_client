@@ -689,13 +689,15 @@ function logSchoolFailure(error, attempts = 0) {
 
 /**
  * Une autre adresse peut fonctionner si l'échec dépend du point d'entrée.
- * Les pannes réseau, le blocage d'adresse et les limites sont globales.
+ * Un échec réseau en fait partie : une adresse déduite d'un RNE erroné ne
+ * résout pas, alors que la tuile du portail mène au bon hôte. Seuls le
+ * blocage d'adresse et les limites sont réellement globaux.
  *
  * @param {unknown} error
  */
 function mayTryAnotherAddress(error) {
   if (!(error instanceof PronoteError)) return false
-  return !['E3', 'E8', 'W2', 'W3', 'W4'].includes(error.stage)
+  return !['E8', 'W2', 'W3', 'W4'].includes(error.stage)
 }
 
 /**
