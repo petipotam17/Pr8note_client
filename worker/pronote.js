@@ -80,7 +80,9 @@ export function describePronoteError(error) {
  *   E2 redirection hors ENT/PRONOTE
  *   E3-D domaine PRONOTE introuvable (aucun serveur à cette adresse)
  *   E3-E portail MonLycée injoignable (saut ENT)
- *   E3-P hôte PRONOTE injoignable (TLS, connexion refusée)
+ *   E3-P hôte PRONOTE injoignable (TLS, connexion refusée) ; suivi de la
+ *        requête fautive, G/P (GET/POST) et 1 élève, 2 parent, 3 racine,
+ *        4 site, 5 autre — exemple E3-PG1
  *   E3-T délai dépassé en attendant PRONOTE
  *   E4 trop de redirections
  *   E5 PRONOTE a refusé la session
@@ -325,6 +327,29 @@ function isEntHost(url) {
 }
 
 /**
+ * Quelle requête a échoué, sans révéler d’hôte : G/P (GET/POST) puis la
+ * page PRONOTE visée (1 élève, 2 parent, 3 racine PRONOTE, 4 site, 5 autre).
+ * Exemple : E3-PG1 = GET de l’Espace élève.
+ *
+ * @param {string} method
+ * @param {string} pathname
+ */
+function e3RequestClass(method, pathname) {
+  const letter = method === 'POST' ? 'P' : 'G'
+  const path = String(pathname || '').toLowerCase()
+  const page = /\/eleve\.html$/.test(path)
+    ? '1'
+    : /\/parent\.html$/.test(path)
+      ? '2'
+      : /^\/pronote\/?$/.test(path)
+        ? '3'
+        : path === '/'
+          ? '4'
+          : '5'
+  return `${letter}${page}`
+}
+
+/**
  * Distingue « ce nom de domaine n’existe pas » d’une panne réseau
  * quelconque. Cloudflare Workers renvoie un TypeError « fetch failed » dont
  * la cause porte le code DNS ; on ne classe en E3-D que sur ces marqueurs,
@@ -377,20 +402,35 @@ async function fetchWithJar(url, init, jar, options) {
     if (cookie) headers.set('Cookie', cookie)
     if (method === 'GET' || method === 'HEAD') headers.delete('Content-Type')
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), PRONOTE_TIMEOUT_MS)
     let response
-    try {
-      response = await fetchImpl(current.toString(), {
-        ...init,
-        method,
-        body,
-        headers,
-        redirect: 'manual',
-        signal: controller.signal,
-      })
-    } catch (error) {
-      const aborted = error instanceof Error && error.name === 'AbortError'
+    let fetchFailure = null
+    // Une lecture peut être coupée par la protection du site (reset
+    // transitoire) : une seconde connexion suffit souvent. On ne rejoue
+    // jamais un POST, et jamais après un délai dépassé.
+    const attempts = method === 'GET' || method === 'HEAD' ? 2 : 1
+    for (let attempt = 0; attempt < attempts && !response; attempt += 1) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), PRONOTE_TIMEOUT_MS)
+      try {
+        response = await fetchImpl(current.toString(), {
+          ...init,
+          method,
+          body,
+          headers,
+          redirect: 'manual',
+          signal: controller.signal,
+        })
+      } catch (error) {
+        fetchFailure = error
+        const aborted = error instanceof Error && error.name === 'AbortError'
+        if (aborted || attempt + 1 >= attempts) break
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    if (!response) {
+      const error = fetchFailure
+      const aborted = error instanceof Error && error.name === "AbortError"
       const dns = !aborted && isDnsFailure(error)
       // Le saut qui échoue compte : le portail MonLycée (E3-E) et l'hôte
       // PRONOTE (E3-P) ne se corrigent pas de la même façon. Un domaine
@@ -407,10 +447,8 @@ async function fetchWithJar(url, init, jar, options) {
               ? 'Le portail MonLycée n’a pas pu être joint depuis Pr8note. Réessaie dans quelques minutes ; si cela persiste, ouvre PRONOTE depuis ton ENT une première fois.'
               : 'Impossible de joindre PRONOTE à cette adresse. Ouvre PRONOTE depuis ton ENT, copie l’adresse de la page et colle-la dans le champ « Adresse PRONOTE de ton lycée », puis réessaie.',
         502,
-        aborted ? 'E3-T' : dns ? 'E3-D' : entHop ? 'E3-E' : 'E3-P',
+        aborted ? 'E3-T' : dns ? 'E3-D' : entHop ? 'E3-E' : `E3-P${e3RequestClass(method, current.pathname)}`,
       )
-    } finally {
-      clearTimeout(timer)
     }
 
     jar.absorb(response, current.toString())

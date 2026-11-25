@@ -718,7 +718,8 @@ function mayTryAnotherAddress(error) {
  */
 function failureRank(error) {
   if (!(error instanceof PronoteError)) return 2
-  return ['E3-D', 'E3-E', 'E3-P', 'E3-N', 'E3-T'].includes(error.stage) ? 0 : 1
+  const stage = String(error.stage || '')
+  return stage.startsWith('E3-') ? 0 : 1
 }
 
 /**
