@@ -1132,7 +1132,7 @@ export function entryCandidates(normalized) {
  * @param {{ headerFor(url: string): string; absorb(response: Response, url: string): void }} jar
  * @param {{ fetchImpl?: typeof fetch; allowedHosts: Set<string>; credentials?: { username: string; password: string } | null }} options
  */
-async function readEntryPage(url, jar, options) {
+export async function readEntryPage(url, jar, options) {
   let current = url
   let method = 'GET'
   let body
@@ -1143,8 +1143,11 @@ async function readEntryPage(url, jar, options) {
   let referer = url
 
   for (let hop = 0; hop <= MAX_ENTRY_HOPS; hop += 1) {
+    // Le formulaire annonce « post » en minuscules : on normalise pour que
+    // les en-têtes de navigation et le repli s'appliquent vraiment.
+    const verb = method.toUpperCase()
     const headers = { ...HTML_HEADERS }
-    if (method === 'POST') {
+    if (verb === 'POST') {
       headers['Content-Type'] = 'application/x-www-form-urlencoded'
       headers.Referer = referer
       try {
@@ -1153,12 +1156,34 @@ async function readEntryPage(url, jar, options) {
         // Une page de départ illisible n'empêche pas l'envoi.
       }
     }
-    const { response, finalUrl } = await fetchWithJar(
-      current,
-      { method, body, headers },
-      jar,
-      options,
-    )
+    let hop
+    try {
+      hop = await fetchWithJar(current, { method: verb, body, headers }, jar, options)
+    } catch (error) {
+      // Un envoi de formulaire coupé au niveau réseau (protection du site)
+      // ne doit pas condamner la session : le CAS a peut-être déjà ouvert
+      // l'Espace élève par ses cookies. On redemande la page d'entrée en
+      // lecture avant d'abandonner.
+      const network = error instanceof PronoteError && /^E3-/.test(error.stage || '')
+      if (verb !== 'POST' || !network) throw error
+      const retry = await fetchWithJar(
+        url,
+        { method: 'GET', headers: HTML_HEADERS },
+        jar,
+        options,
+      )
+      const retryHtml = await retry.response.text()
+      const retryPage = {
+        response: retry.response,
+        finalUrl: retry.finalUrl,
+        html: retryHtml,
+        attributes: parseStartAttributes(retryHtml),
+        logins,
+      }
+      if (retryPage.attributes) return retryPage
+      throw error
+    }
+    const { response, finalUrl } = hop
     referer = finalUrl
     const html = await response.text()
     page = { response, finalUrl, html, attributes: parseStartAttributes(html), logins }

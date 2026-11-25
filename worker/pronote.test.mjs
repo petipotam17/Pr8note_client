@@ -12,7 +12,9 @@ import {
   normalizePronoteUrl,
   parseStartAttributes,
   PronoteError,
+  readEntryPage,
 } from './pronote.js'
+import { CookieJar } from './index.js'
 
 /* ------------------------------------------------------------------ */
 /* Petit serveur PRONOTE de test                                      */
@@ -743,6 +745,49 @@ test('une redirection vers un alias PRONOTE du même domaine est suivie', async 
   })
   assert.equal(school.generalAverage, 15.5)
   assert.ok(school.subjects.length >= 1)
+})
+
+test('un envoi de formulaire coupé ne condamne pas la session', async () => {
+  const url = 'https://lycee.index-education.net/pronote/eleve.html'
+  const formPage = `<!doctype html><html><body>
+    <form method="post" action="/pronote/49c96cf991000e9a63de">
+      <input type="hidden" name="jeton" value="abc" />
+    </form>
+  </body></html>`
+  const startPage =
+    `<script>window.Start ({ h: 7, a: 6, e: 'eleve.demo', f: 'mot-de-passe' })</script>`
+  let readEntry = 0
+  const seen = []
+  const fetchImpl = async (input, init = {}) => {
+    const method = (init.method || 'GET').toUpperCase()
+    const target = new URL(input)
+    seen.push(`${method} ${target.pathname}`)
+    if (method === 'POST') {
+      const failure = new TypeError('fetch failed')
+      failure.cause = { code: 'ECONNRESET', message: 'connection reset by peer' }
+      throw failure
+    }
+    if (target.pathname.endsWith('/eleve.html')) {
+      readEntry += 1
+      return new Response(readEntry === 1 ? formPage : startPage, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      })
+    }
+    return new Response('', { status: 404 })
+  }
+
+  const page = await readEntryPage(url, new CookieJar(), {
+    fetchImpl,
+    allowedHosts: new Set(['lycee.index-education.net']),
+  })
+
+  assert.equal(page.attributes?.h, '7')
+  assert.deepEqual(seen, [
+    'GET /pronote/eleve.html',
+    'POST /pronote/49c96cf991000e9a63de',
+    'GET /pronote/eleve.html',
+  ])
 })
 
 test('une page sans bloc Start demande de vérifier l’adresse PRONOTE', async () => {
