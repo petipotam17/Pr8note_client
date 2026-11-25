@@ -804,6 +804,9 @@ export async function loginToMonlycee(username, password, options = {}) {
   // Compteur partagé par toute la connexion (MonLycée puis PRONOTE) : la
   // limite de l'hébergeur porte sur l'invocation, pas sur un service.
   const budget = { used: 0, max: SUBREQUEST_BUDGET }
+  // Repères temporaires : nombre de requêtes consommées à chaque étape.
+  const marks = []
+  const mark = (phase) => marks.push(`${phase}:${budget.used}`)
 
   const started = await fetchFollowing(
     startUrl,
@@ -905,6 +908,7 @@ export async function loginToMonlycee(username, password, options = {}) {
     )
   }
 
+  mark('login')
   const identity = await readIdentity(jar, username, fetchImpl, budget)
   const student = identity.student
   const verifiedAt = new Date().toISOString()
@@ -926,6 +930,29 @@ export async function loginToMonlycee(username, password, options = {}) {
   let pronoteUrl = savedUrl || ''
   let failure = null
   const attemptsStarted = Date.now()
+  // Trace temporaire de la consommation de requêtes : sans elle, un
+  // dépassement de limite reste invisible.
+  const recordFlow = async () => {
+    if (typeof options.recordFailure !== 'function') return
+    try {
+      const written = options.recordFailure({
+        stage: 'FLOW',
+        method: 'FLOW',
+        url: 'https://flow.invalid/',
+        body: '',
+        error: {
+          name: 'Flow',
+          message: `budget ${budget.used}/${budget.max} · ${tried.size} adresse(s) · ${marks.join(' ')}`.slice(
+            0,
+            200,
+          ),
+        },
+      })
+      if (written && typeof written.then === 'function') await written
+    } catch {
+      // Le diagnostic ne doit jamais gêner la connexion.
+    }
+  }
 
   for (let attempt = 0; attempt < MAX_SCHOOL_ATTEMPTS; attempt += 1) {
     if (Date.now() - attemptsStarted > SCHOOL_ATTEMPTS_BUDGET_MS) break
@@ -942,6 +969,7 @@ export async function loginToMonlycee(username, password, options = {}) {
           candidates.push(
             ...(await discoverPronoteCandidates(jar, fetchImpl, identity.uai, budget)),
           )
+          mark('disc')
         } catch {
           // La découverte reste un confort : l'élève peut saisir l'adresse.
         }
@@ -971,6 +999,7 @@ export async function loginToMonlycee(username, password, options = {}) {
       if (progress.addressConfirmed && error instanceof PronoteError) {
         error.addressConfirmed = true
       }
+      mark(`a${tried.size}`)
       // On conserve l'échec le plus parlant, pas le dernier essayé : sinon
       // l'adresse devinée du RNE, souvent inexistante, masque la vraie
       // réponse de PRONOTE sur l'adresse de l'élève.
@@ -982,25 +1011,7 @@ export async function loginToMonlycee(username, password, options = {}) {
   }
 
   if (!connection) {
-    // Trace temporaire de la consommation de requêtes : sans elle, un
-    // dépassement de limite reste invisible.
-    if (typeof options.recordFailure === 'function') {
-      try {
-        const written = options.recordFailure({
-          stage: 'FLOW',
-          method: 'FLOW',
-          url: 'https://flow.invalid/',
-          body: '',
-          error: {
-            name: 'Flow',
-            message: `budget ${budget.used}/${budget.max} · ${tried.size} adresse(s)`,
-          },
-        })
-        if (written && typeof written.then === 'function') await written
-      } catch {
-        // Le diagnostic ne doit jamais gêner la connexion.
-      }
-    }
+    await recordFlow()
     if (!failure) {
       return {
         student,
@@ -1034,6 +1045,7 @@ export async function loginToMonlycee(username, password, options = {}) {
     }
     return { student: enriched, verifiedAt, school, pronoteUrl }
   } catch (error) {
+    await recordFlow()
     logSchoolFailure(error, tried.size)
     return {
       student,

@@ -1203,6 +1203,9 @@ export async function readEntryPage(url, jar, options) {
   let body
   let page = null
   let logins = 0
+  // Une nouvelle connexion à l'ENT coûte tout un aller-retour Keycloak. Le
+  // compteur partagé limite ce coût à une fois pour toute l'ouverture.
+  const loginState = options.loginState || { used: 0, max: 2 }
   // Page d'où part le formulaire : un navigateur l'envoie en Referer, et les
   // protections des sites refusent parfois un POST qui n'en a pas.
   let referer = url
@@ -1290,8 +1293,9 @@ export async function readEntryPage(url, jar, options) {
     // mémoire pour cette requête (jamais stockés).
     const login = entLoginForm(html, finalUrl, options.credentials)
     if (login) {
+      if (loginState.used >= loginState.max) return { ...page, logins }
+      loginState.used += 1
       logins += 1
-      if (logins > 2) return { ...page, logins }
       method = 'POST'
       body = login.body
       current = login.action
@@ -1337,7 +1341,15 @@ export async function openPronoteSession({
   const host = normalizeHost(new URL(normalized).hostname)
   if (typeof jar.allowHost === 'function') jar.allowHost(host)
   const allowedHosts = new Set([host])
-  const entryOptions = { fetchImpl, allowedHosts, credentials, entryHost: host, recordFailure, budget }
+  const entryOptions = {
+    fetchImpl,
+    allowedHosts,
+    credentials,
+    entryHost: host,
+    recordFailure,
+    budget,
+    loginState: { used: 0, max: 1 },
+  }
 
   const candidates = entryCandidates(normalized)
 
