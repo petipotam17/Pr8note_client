@@ -342,6 +342,23 @@ function isEntHost(url) {
  * @param {string} host
  * @param {string | undefined} entryHost
  */
+/**
+ * Cause courte d’un échec réseau, sans détail technique : T délai, R
+ * connexion réinitialisée/refusée, D nom de domaine introuvable, X autre.
+ *
+ * @param {unknown} error
+ */
+function failureKind(error) {
+  const typed = /** @type {{ name?: unknown; cause?: { code?: unknown; message?: unknown } }} */ (
+    error
+  )
+  if (String(typed?.name || '') === 'AbortError') return 'T'
+  const cause = `${String(typed?.cause?.code ?? '')} ${String(typed?.cause?.message ?? '')}`
+  if (/ECONNRESET|ECONNREFUSED|EPIPE|socket hang up/i.test(cause)) return 'R'
+  if (/ENOTFOUND|EAI_AGAIN|ENODATA|DNS|name resolution|resolve host/i.test(cause)) return 'D'
+  return 'X'
+}
+
 function hostClassSuffix(host, entryHost) {
   if (!entryHost || host === entryHost) return ''
   return host.endsWith('.index-education.com') ? '-C' : '-A'
@@ -365,21 +382,6 @@ function e3RequestClass(method, pathname) {
   const file = path.split('/').filter(Boolean).pop() || ''
   const hint = file.replace(/[^a-z0-9._-]/gi, '').slice(0, 20)
   return hint ? `${letter}5-${hint}` : `${letter}5`
-}
-
-/**
- * Distingue « ce nom de domaine n’existe pas » d’une panne réseau
- * quelconque. Cloudflare Workers renvoie un TypeError « fetch failed » dont
- * la cause porte le code DNS ; on ne classe en E3-D que sur ces marqueurs,
- * jamais d’après le nom d’hôte (qui ne doit pas parvenir à l’élève).
- *
- * @param {unknown} error
- */
-function isDnsFailure(error) {
-  if (!(error instanceof Error)) return false
-  const cause = /** @type {{ code?: unknown; message?: unknown } | undefined} */ (error.cause)
-  const detail = `${String(cause?.code ?? '')} ${String(cause?.message ?? '')} ${error.message}`
-  return /ENOTFOUND|EAI_AGAIN|ENODATA|DNS|name resolution|resolve host/i.test(detail)
 }
 
 /**
@@ -440,16 +442,19 @@ async function fetchWithJar(url, init, jar, options) {
         })
       } catch (error) {
         fetchFailure = error
-        const aborted = error instanceof Error && error.name === 'AbortError'
-        if (aborted || attempt + 1 >= attempts) break
+        if (failureKind(error) === 'T' || attempt + 1 >= attempts) break
       } finally {
         clearTimeout(timer)
       }
     }
     if (!response) {
       const error = fetchFailure
-      const aborted = error instanceof Error && error.name === "AbortError"
-      const dns = !aborted && isDnsFailure(error)
+      // Dans Workers, une requête interrompue rejette parfois un DOMException
+      // qui n'est pas une Error : se fier au nom évite de classer un délai
+      // comme une panne réseau.
+      const kind = failureKind(error)
+      const aborted = kind === 'T'
+      const dns = kind === 'D'
       // Le saut qui échoue compte : le portail MonLycée (E3-E) et l'hôte
       // PRONOTE (E3-P) ne se corrigent pas de la même façon. Un domaine
       // inexistant (E3-D) ne se corrige pas en réessayant, et un PRONOTE
@@ -471,7 +476,7 @@ async function fetchWithJar(url, init, jar, options) {
             ? 'E3-D'
             : entHop
               ? 'E3-E'
-              : `E3-P${e3RequestClass(method, current.pathname)}${hostClassSuffix(host, options.entryHost)}`,
+              : `E3-P${e3RequestClass(method, current.pathname)}${hostClassSuffix(host, options.entryHost)}#${kind}`,
       )
     }
 
@@ -1227,6 +1232,9 @@ export async function readEntryPage(url, jar, options) {
         logins,
       }
       if (retryPage.attributes) return retryPage
+      // Un formulaire inaccessible ne doit pas arrêter l'ouverture : on rend
+      // la page obtenue pour que les autres points d'entrée soient essayés.
+      if (page) return page
       throw error
     }
     const { response, finalUrl } = hop

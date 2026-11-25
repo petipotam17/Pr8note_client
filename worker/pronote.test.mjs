@@ -792,7 +792,7 @@ test('un envoi de formulaire coupé ne condamne pas la session', async () => {
   ])
 })
 
-test('un formulaire vers un autre sous-domaine est signalé', async () => {
+test('un formulaire inaccessible ne bloque pas les autres points d’entrée', async () => {
   const url = 'https://lycee.index-education.net/pronote/eleve.html'
   const formPage = `<!doctype html><html><body>
     <form method="post" action="https://sso.index-education.net/pronote/1a47d2c53f32af4eafb7">
@@ -808,15 +808,16 @@ test('un formulaire vers un autre sous-domaine est signalé', async () => {
     return new Response(formPage, { status: 200, headers: { 'Content-Type': 'text/html' } })
   }
 
-  const failure = await readEntryPage(url, new CookieJar(), {
+  // L'échec ne doit plus remonter : la page est rendue pour que
+  // openPronoteSession puisse essayer /pronote/, /pronote/parent.html, etc.
+  const page = await readEntryPage(url, new CookieJar(), {
     fetchImpl,
     allowedHosts: new Set(['lycee.index-education.net']),
     entryHost: 'lycee.index-education.net',
-  }).catch((error) => error)
+  })
 
-  assert.ok(failure instanceof PronoteError)
-  // Le suffixe -A indique un autre hôte .net, sans le nommer.
-  assert.match(failure.stage, /^E3-PP5-1a47d2c53f32af4eafb7-A$/)
+  assert.equal(page.attributes, null)
+  assert.equal(page.response.status, 200)
 })
 
 test('une page sans bloc Start demande de vérifier l’adresse PRONOTE', async () => {
