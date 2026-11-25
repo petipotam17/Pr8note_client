@@ -24,9 +24,10 @@ import {
 import {
   PronoteError,
   describePronoteError,
-  discoverPronoteUrl,
-  fetchSchoolData,
+  discoverPronoteCandidates,
   normalizePronoteUrl,
+  openPronoteSession,
+  readSchoolData,
 } from './pronote.js'
 
 const PORTAL_ORIGIN = 'https://psn.monlycee.net'
@@ -632,7 +633,9 @@ async function readIdentity(jar, username, fetchImpl = fetch) {
         continue
       }
       const student = parseIdentityPayload(payload, username)
-      if (student) return student
+      // Le RNE (code établissement) permet de retrouver l'adresse PRONOTE.
+      const uai = /\b(\d{7}[A-Z])\b/.exec(text)?.[1] ?? ''
+      if (student) return { student, uai }
     } catch {
       // Un endpoint d'identité indisponible ne doit pas annuler une session
       // pourtant ouverte : on tente le suivant, puis on renvoie l'identité
@@ -640,7 +643,58 @@ async function readIdentity(jar, username, fetchImpl = fetch) {
     }
   }
 
-  return studentFromPayload(username, [])
+  return { student: studentFromPayload(username, []), uai: '' }
+}
+
+const MAX_SCHOOL_ATTEMPTS = 3
+// Budget total des essais d'adresses : au-delà, on rend la main à l'élève
+// plutôt que de laisser la requête traîner.
+const SCHOOL_ATTEMPTS_BUDGET_MS = 30_000
+
+/**
+ * Erreur PRONOTE telle qu'elle est renvoyée au client, avec son code d'étape
+ * court (E1…E9, W1…W6), sans hôte, identifiant ni détail technique. Le nombre
+ * d'adresses essayées dit si la découverte automatique a trouvé quelque chose.
+ *
+ * @param {unknown} error
+ * @param {number} [attempts]
+ */
+function schoolFailure(error, attempts = 0) {
+  const suffix = attempts > 1 ? ` · ${attempts} adresses essayées` : ''
+  return {
+    code: error instanceof PronoteError ? error.code : 'PRONOTE_UNAVAILABLE',
+    stage: error instanceof PronoteError ? error.stage || null : null,
+    message:
+      error instanceof PronoteError
+        ? `${describePronoteError(error)}${suffix}`
+        : `PRONOTE n’a pas pu être synchronisé. Réessaie dans quelques instants.${suffix}`,
+  }
+}
+
+/**
+ * @param {unknown} error
+ * @param {number} [attempts]
+ */
+function logSchoolFailure(error, attempts = 0) {
+  if (typeof console === 'undefined' || !console.error) return
+  console.error('PRONOTE sync failed:', {
+    code: error instanceof PronoteError ? error.code : 'UNKNOWN',
+    stage: error instanceof PronoteError ? error.stage || null : null,
+    attempts,
+    name: error instanceof Error ? error.name : 'unknown',
+    message: error instanceof Error ? error.message : String(error),
+  })
+}
+
+/**
+ * Une autre adresse peut fonctionner si l'échec dépend du point d'entrée.
+ * Les pannes réseau, le blocage d'adresse et les limites sont globales.
+ *
+ * @param {unknown} error
+ */
+function mayTryAnotherAddress(error) {
+  if (!(error instanceof PronoteError)) return false
+  return !['E3', 'E8', 'W2', 'W3', 'W4'].includes(error.stage)
 }
 
 /**
@@ -753,37 +807,85 @@ export async function loginToMonlycee(username, password, options = {}) {
     )
   }
 
-  const student = await readIdentity(jar, username, fetchImpl)
+  const identity = await readIdentity(jar, username, fetchImpl)
+  const student = identity.student
   const verifiedAt = new Date().toISOString()
 
   // PRONOTE est un service séparé : on ouvre son Espace élève avec la session
   // MonLycée qui vient d'être créée, puis on lit les données réelles. Un refus
   // PRONOTE ne doit pas annuler une connexion MonLycée pourtant réussie.
-  let pronoteUrl = normalizePronoteUrl(options.pronoteUrl || '')
-  if (!pronoteUrl) pronoteUrl = await discoverPronoteUrl(jar, fetchImpl)
+  // L'adresse saisie passe en premier ; si elle ne mène à rien, la découverte
+  // automatique prend le relais avec plusieurs points d'entrée.
+  const savedUrl = normalizePronoteUrl(options.pronoteUrl || '')
+  const credentials = { username, password }
+  const tried = new Set()
+  const candidates = savedUrl ? [savedUrl] : []
+  let discoveryPending = !savedUrl
+  let connection = null
+  let pronoteUrl = savedUrl || ''
+  let failure = null
+  const attemptsStarted = Date.now()
 
-  if (!pronoteUrl) {
+  for (let attempt = 0; attempt < MAX_SCHOOL_ATTEMPTS; attempt += 1) {
+    if (Date.now() - attemptsStarted > SCHOOL_ATTEMPTS_BUDGET_MS) break
+    let candidate = null
+    while (!candidate) {
+      const next = candidates.find((value) => !tried.has(value))
+      if (next) {
+        candidate = next
+        break
+      }
+      if (discoveryPending) {
+        discoveryPending = false
+        try {
+          candidates.push(...(await discoverPronoteCandidates(jar, fetchImpl, identity.uai)))
+        } catch {
+          // La découverte reste un confort : l'élève peut saisir l'adresse.
+        }
+        continue
+      }
+      break
+    }
+    if (!candidate) break
+
+    tried.add(candidate)
+    pronoteUrl = candidate
+    try {
+      connection = await openPronoteSession({ url: candidate, jar, fetchImpl, credentials })
+      break
+    } catch (error) {
+      failure = error
+      // Une adresse peut être mauvaise sans que le compte soit en cause :
+      // on essaie la suivante tant que l'échec le permet.
+      if (!mayTryAnotherAddress(error)) break
+    }
+  }
+
+  if (!connection) {
+    if (!failure) {
+      return {
+        student,
+        verifiedAt,
+        school: null,
+        schoolError: {
+          code: 'PRONOTE_URL_REQUIRED',
+          message:
+            'Ajoute l’adresse PRONOTE de ton lycée pour afficher tes vraies notes, ton emploi du temps et ta messagerie.',
+        },
+      }
+    }
+    logSchoolFailure(failure, tried.size)
     return {
       student,
       verifiedAt,
       school: null,
-      schoolError: {
-        code: 'PRONOTE_URL_REQUIRED',
-        message:
-          'Ajoute l’adresse PRONOTE de ton lycée pour afficher tes vraies notes, ton emploi du temps et ta messagerie.',
-      },
+      pronoteUrl: pronoteUrl || null,
+      schoolError: schoolFailure(failure, tried.size),
     }
   }
 
   try {
-    const school = await fetchSchoolData({
-      url: pronoteUrl,
-      jar,
-      fetchImpl,
-      // Les identifiants restent en mémoire le temps de la requête : ils
-      // servent si l'ENT redemande une connexion en ouvrant PRONOTE.
-      credentials: { username, password },
-    })
+    const school = await readSchoolData(connection, { fetchImpl })
     const enriched = {
       ...student,
       className: school.student.className || student.className,
@@ -791,29 +893,13 @@ export async function loginToMonlycee(username, password, options = {}) {
     }
     return { student: enriched, verifiedAt, school, pronoteUrl }
   } catch (error) {
-    if (typeof console !== 'undefined' && console.error) {
-      console.error('PRONOTE sync failed:', {
-        code: error instanceof PronoteError ? error.code : 'UNKNOWN',
-        stage: error instanceof PronoteError ? error.stage || null : null,
-        name: error instanceof Error ? error.name : 'unknown',
-        message: error instanceof Error ? error.message : String(error),
-      })
-    }
+    logSchoolFailure(error, tried.size)
     return {
       student,
       verifiedAt,
       school: null,
       pronoteUrl,
-      schoolError: {
-        code: error instanceof PronoteError ? error.code : 'PRONOTE_UNAVAILABLE',
-        // Code d'étape court (E1…E9, W1…W6) : il indique où la connexion
-        // s'est arrêtée sans révéler d'hôte, d'identifiant ni de détail.
-        stage: error instanceof PronoteError ? error.stage || null : null,
-        message:
-          error instanceof PronoteError
-            ? describePronoteError(error)
-            : 'PRONOTE n’a pas pu être synchronisé. Réessaie dans quelques instants.',
-      },
+      schoolError: schoolFailure(error, tried.size),
     }
   }
 }

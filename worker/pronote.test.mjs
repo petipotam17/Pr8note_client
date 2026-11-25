@@ -4,6 +4,7 @@ import { createCipheriv, createDecipheriv, createHash } from 'node:crypto'
 import { deflateRawSync, inflateRawSync } from 'node:zlib'
 import {
   describePronoteError,
+  discoverPronoteCandidates,
   fetchSchoolData,
   md5Hex,
   normalizePronoteUrl,
@@ -601,7 +602,7 @@ test('un refus d’accès PRONOTE remonte une erreur générique', async () => {
     (error) =>
       error instanceof PronoteError &&
       error.code === 'PRONOTE_ACCESS' &&
-      error.stage === 'E5' &&
+      error.stage === 'E5-403' &&
       !/403|index-education|secret-ent/i.test(error.message),
   )
 
@@ -715,6 +716,144 @@ test('une page sans bloc Start demande de vérifier l’adresse PRONOTE', async 
       /adresse PRONOTE/i.test(error.message) &&
       !/index-education|secret-ent/i.test(error.message),
   )
+})
+
+/* ------------------------------------------------------------------ */
+/* Découverte de l'adresse PRONOTE dans le portail                    */
+/* ------------------------------------------------------------------ */
+
+function createFakePortal(pages) {
+  const calls = []
+  const fetchImpl = async (input) => {
+    const url = new URL(input)
+    calls.push(url.toString())
+    const page = pages[url.toString()] ?? pages[url.pathname]
+    if (!page) return new Response('', { status: 404 })
+    return new Response(page.body, {
+      status: page.status ?? 200,
+      headers: { 'Content-Type': page.type ?? 'text/html' },
+    })
+  }
+  return { fetchImpl, calls }
+}
+
+test('la découverte suit la page de services et garde le lien signé', async () => {
+  const portal = createFakePortal({
+    'https://psn.monlycee.net/': {
+      body: `<!doctype html><html><body>
+        <a href="/services"><span>Mes services</span></a>
+      </body></html>`,
+    },
+    '/services': {
+      body: `<!doctype html><html><body>
+        <a href="https://0751234a.index-education.net/pronote/eleve.html?sso=jeton-signe">
+          <img src="pronote.svg"><span>PRONOTE</span>
+        </a>
+      </body></html>`,
+    },
+  })
+
+  const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl)
+  assert.equal(
+    candidates[0],
+    'https://0751234a.index-education.net/pronote/eleve.html?sso=jeton-signe',
+  )
+  assert.ok(portal.calls.includes('https://psn.monlycee.net/services'))
+})
+
+test('une tuile PRONOTE relative sur le portail devient une adresse complète', async () => {
+  const portal = createFakePortal({
+    'https://psn.monlycee.net/': {
+      body: `<!doctype html><html><body>
+        <a href="/pronote/acces?ticket=abc">PRONOTE</a>
+      </body></html>`,
+    },
+  })
+
+  const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl)
+  assert.equal(candidates[0], 'https://psn.monlycee.net/pronote/acces?ticket=abc')
+})
+
+test('une tuile PRONOTE en image mène au lanceur du portail', async () => {
+  const portal = createFakePortal({
+    'https://psn.monlycee.net/': {
+      body: '<!doctype html><html><body><a href="/sg/app/42"><img src="/assets/pronote.svg" alt=""></a></body></html>',
+    },
+  })
+
+  const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl)
+  assert.equal(candidates[0], 'https://psn.monlycee.net/sg/app/42')
+})
+
+test('la découverte lit aussi les listes JSON du portail', async () => {
+  const portal = createFakePortal({
+    'https://psn.monlycee.net/': {
+      body: `<!doctype html><html><body><a href="/api/services">Services</a></body></html>`,
+    },
+    '/api/services': {
+      type: 'application/json',
+      body: JSON.stringify({
+        applications: [
+          { nom: 'PRONOTE', url: 'https:\\/\\/0750000x.index-education.net\\/pronote\\/' },
+        ],
+      }),
+    },
+  })
+
+  const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl)
+  assert.ok(
+    candidates.includes('https://0750000x.index-education.net/pronote/eleve.html'),
+    `adresse absente de ${JSON.stringify(candidates)}`,
+  )
+})
+
+test('les pages de navigation sont explorées après les services', async () => {
+  const portal = createFakePortal({
+    'https://psn.monlycee.net/': {
+      body: '<!doctype html><html><body><a href="/mon-espace">Mon espace</a></body></html>',
+    },
+    '/mon-espace': {
+      body: '<!doctype html><html><body><a href="https://0751234a.index-education.net/pronote/">PRONOTE</a></body></html>',
+    },
+  })
+
+  const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl)
+  assert.ok(portal.calls.includes('https://psn.monlycee.net/mon-espace'))
+  assert.equal(
+    candidates[0],
+    'https://0751234a.index-education.net/pronote/eleve.html',
+  )
+})
+
+test('les liens de déconnexion ne sont jamais suivis', async () => {
+  const portal = createFakePortal({
+    'https://psn.monlycee.net/': {
+      body: '<!doctype html><html><body><a href="/deconnexion">Se déconnecter</a></body></html>',
+    },
+  })
+
+  await discoverPronoteCandidates(jar, portal.fetchImpl)
+  assert.ok(!portal.calls.includes('https://psn.monlycee.net/deconnexion'))
+})
+
+test('le code établissement du portail reconstruit l’adresse PRONOTE', async () => {
+  const portal = createFakePortal({
+    'https://psn.monlycee.net/': {
+      body: '<!doctype html><html><body>Lycée (0751234A) — aucun lien utile</body></html>',
+    },
+  })
+
+  const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl)
+  assert.equal(candidates[0], 'https://0751234a.index-education.net/pronote/eleve.html')
+})
+
+test('un RNE fourni par l’identité suffit à proposer une adresse', async () => {
+  const portal = createFakePortal({
+    'https://psn.monlycee.net/': { body: '<!doctype html><html><body>Portail</body></html>' },
+  })
+
+  const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl, '0759999Z')
+  assert.ok(candidates.includes('https://0759999z.index-education.net/pronote/eleve.html'))
 })
 
 test('le bloc Start est lu même avec des accolades dans une valeur', () => {

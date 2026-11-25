@@ -475,58 +475,204 @@ export function normalizePronoteUrl(input) {
   return url.toString()
 }
 
+/* ------------------------------------------------------------------ */
+/* Découverte de l'adresse PRONOTE dans l'ENT                          */
+/* ------------------------------------------------------------------ */
+
+const DISCOVERY_PAGE_BUDGET = 5
+const DISCOVERY_DEADLINE_MS = 20_000
+
 /**
- * Cherche le lien PRONOTE dans le portail MonLycée déjà authentifié.
- * Le portail peut très bien ne pas l'exposer : on renvoie alors null.
+ * @param {string} value
+ * @param {string} baseUrl
+ */
+function resolvePortalUrl(value, baseUrl) {
+  const cleaned = String(value || '')
+    .trim()
+    .replace(/&amp;/gi, '&')
+    // Un portail peut doubler l'échappement JSON (\\/), voire davantage.
+    .replace(/\\+\//g, '/')
+  if (!cleaned || /^(?:javascript:|mailto:|tel:|data:|#)/i.test(cleaned)) return null
+  try {
+    return new URL(cleaned, baseUrl)
+  } catch {
+    return null
+  }
+}
+
+/** Une adresse capable d'ouvrir PRONOTE : hôte Index Éducation ou /pronote. */
+function looksLikePronote(url) {
+  if (url.protocol !== 'https:') return false
+  const host = normalizeHost(url.hostname)
+  if (!host.includes('.')) return false
+  if (host.endsWith('index-education.net') || host.endsWith('index-education.com')) return true
+  return /pronote/i.test(url.pathname)
+}
+
+/**
+ * Lit une page du portail et en sort les adresses PRONOTE, les pages de
+ * services à explorer et le code établissement (RNE) s'il y figure.
+ *
+ * @param {string} body
+ * @param {string} pageUrl
+ */
+function scanPortalPage(body, pageUrl) {
+  const text = body.replace(/&amp;/gi, '&').replace(/\\+\//g, '/')
+  const origin = new URL(pageUrl).origin
+  const pronote = new Set()
+  const launchers = new Set()
+  const services = new Set()
+  const links = new Set()
+
+  const addPronote = (value) => {
+    const url = resolvePortalUrl(value, pageUrl)
+    if (!url || !looksLikePronote(url)) return
+    // Une image ou une feuille de style nommée « pronote » n'ouvre rien.
+    if (/\.(?:css|js|mjs|mjsx|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|pdf|zip)(?:[?#]|$)/i.test(url.pathname)) {
+      return
+    }
+    pronote.add(url.toString())
+  }
+
+  // URLs absolues, chemins relatifs et chaînes JSON (barres échappées).
+  for (const match of text.match(/https?:\/\/[^\s"'<>\\]+/gi) ?? []) addPronote(match)
+  for (const match of text.match(/["'](\/[^"'\s<>\\]{2,})["']/g) ?? []) addPronote(match.slice(1, -1))
+
+  // Tuiles, liens et formulaires dont le libellé ou l'action désigne PRONOTE.
+  for (const anchor of text.match(/<a\b[^>]*>[\s\S]{0,300}?<\/a>/gi) ?? []) {
+    const href = /href=["']([^"']+)["']/i.exec(anchor)?.[1]
+    if (!href) continue
+    const target = resolvePortalUrl(href, pageUrl)
+    if (!target) continue
+    const label = anchor.replace(/<[^>]*>/g, ' ')
+    // Le libellé peut être une image : on lit tout le lien (alt, src, title).
+    if (/pronote/i.test(anchor)) {
+      if (looksLikePronote(target)) pronote.add(target.toString())
+      // Une tuile PRONOTE peut pointer vers un lanceur du portail, qui
+      // redirige ensuite vers l'Espace élève : l'adresse reste valable.
+      else if (target.origin === origin) launchers.add(target.toString())
+      continue
+    }
+    if (target.origin !== origin) continue
+    // On ne suit jamais un lien qui ferme la session ou supprime un compte.
+    if (/log ?out|d[eé]connexion|sign ?out|disconnect|supprimer|delete|mot de passe/i.test(href)) {
+      continue
+    }
+    // Ni un fichier statique.
+    if (/\.(?:css|js|mjs|png|jpe?g|gif|svg|ico|woff2?|ttf|pdf|zip)(?:[?#]|$)/i.test(target.pathname)) {
+      continue
+    }
+    const path = target.toString()
+    // Une tuile « Mes services » mène souvent à la page qui contient PRONOTE.
+    if (/service|ressource|application|outil|acc[eè]s|d[eé]marche/i.test(`${label} ${href}`)) {
+      services.add(path)
+    } else {
+      links.add(path)
+    }
+  }
+  for (const action of text.match(/action=["']([^"']+)["']/gi) ?? []) addPronote(action.slice(8, -1))
+
+  const uai = /\b(\d{7}[A-Z])\b/.exec(text)?.[1] ?? ''
+  return {
+    pronote: Array.from(pronote),
+    launchers: Array.from(launchers),
+    services: Array.from(services),
+    links: Array.from(links),
+    uai,
+  }
+}
+
+/**
+ * Adresses PRONOTE possibles pour cet élève, de la plus sûre à la plus
+ * approximative.
+ *
+ * La page d'accueil de l'ENT ne contient souvent aucun lien utile : on
+ * explore aussi les pages de services et les listes JSON, et on déduit
+ * l'adresse du code établissement (RNE) quand il est exposé. Chaque adresse
+ * est ensuite essayée pour de vrai : seule une session PRONOTE ouverte
+ * compte.
  *
  * @param {{ headerFor(url: string): string; absorb(response: Response, url: string): void }} jar
- * @param {typeof fetch} fetchImpl
+ * @param {typeof fetch} [fetchImpl]
+ * @param {string} [hint] RNE connu par ailleurs (identité MonLycée).
+ */
+export async function discoverPronoteCandidates(jar, fetchImpl = fetch, hint = '') {
+  const scores = new Map()
+  const keep = (value, score) => {
+    const normalized = normalizePronoteUrl(value)
+    if (!normalized) return
+    if ((scores.get(normalized) ?? 0) >= score) return
+    scores.set(normalized, score)
+  }
+
+  const allowedHosts = new Set(['psn.monlycee.net', 'auth.monlycee.net'])
+  const queue = ['https://psn.monlycee.net/']
+  const seen = new Set()
+  const started = Date.now()
+  let uai = /^\d{7}[A-Z]$/.test(hint) ? hint : ''
+
+  while (
+    queue.length &&
+    seen.size < DISCOVERY_PAGE_BUDGET &&
+    Date.now() - started < DISCOVERY_DEADLINE_MS
+  ) {
+    const pageUrl = queue.shift()
+    if (!pageUrl || seen.has(pageUrl)) continue
+    seen.add(pageUrl)
+
+    let body
+    let finalUrl
+    try {
+      const result = await fetchWithJar(
+        pageUrl,
+        {
+          method: 'GET',
+          headers: {
+            ...HTML_HEADERS,
+            Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+          },
+        },
+        jar,
+        { fetchImpl, allowedHosts },
+      )
+      if (!result.response.ok) continue
+      finalUrl = result.finalUrl
+      body = await result.response.text()
+    } catch {
+      continue
+    }
+
+    const scan = scanPortalPage(body, finalUrl)
+    uai ||= scan.uai
+    for (const url of scan.pronote) keep(url, 6)
+    for (const url of scan.launchers) keep(url, 5)
+    // Les pages de services passent avant les autres liens du portail.
+    for (const link of scan.services.reverse()) if (!seen.has(link)) queue.unshift(link)
+    for (const link of scan.links) if (!seen.has(link)) queue.push(link)
+    if (queue.length > 40) queue.length = 40
+  }
+
+  // Les lycées hébergés chez Index Éducation utilisent l'adresse de leur RNE.
+  if (/^\d{7}[A-Z]$/.test(uai)) {
+    keep(`https://${uai.toLowerCase()}.index-education.net/pronote/eleve.html`, 3)
+  }
+  // Dernier recours : certains portails servent PRONOTE sous leur domaine.
+  keep('https://psn.monlycee.net/pronote/eleve.html', 1)
+
+  return Array.from(scores.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([url]) => url)
+}
+
+/**
+ * Compatibilité : première adresse trouvée, ou null.
+ *
+ * @param {{ headerFor(url: string): string; absorb(response: Response, url: string): void }} jar
+ * @param {typeof fetch} [fetchImpl]
  */
 export async function discoverPronoteUrl(jar, fetchImpl = fetch) {
-  try {
-    const { response } = await fetchWithJar(
-      'https://psn.monlycee.net/',
-      {
-        method: 'GET',
-        headers: {
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'fr-FR,fr;q=0.9',
-          'User-Agent': PRONOTE_USER_AGENT,
-        },
-      },
-      jar,
-      { fetchImpl, allowedHosts: new Set(['psn.monlycee.net', 'auth.monlycee.net']) },
-    )
-    if (!response.ok) return null
-    // Les portails construisent souvent leurs liens dans du JSON, où les
-    // barres obliques sont échappées (https:\/\/…).
-    const html = (await response.text()).replace(/\\\//g, '/')
-
-    const absolute = html.match(/https?:\/\/[^\s"'<>]+/gi) || []
-    for (const link of absolute) {
-      let url
-      try {
-        url = new URL(link.replace(/&amp;/g, '&'))
-      } catch {
-        continue
-      }
-      const host = normalizeHost(url.hostname)
-      if (!host.endsWith('index-education.net') && !host.endsWith('monlycee.net')) continue
-      if (!url.pathname.toLowerCase().includes('pronote')) continue
-      const normalized = normalizePronoteUrl(url.toString())
-      if (normalized) return normalized
-    }
-
-    const relative = html.match(/["'](\/[^"']*pronote[^"']*)["']/gi) || []
-    for (const link of relative) {
-      const cleaned = link.slice(1, -1).replace(/&amp;/g, '&')
-      const normalized = normalizePronoteUrl(new URL(cleaned, 'https://psn.monlycee.net/').toString())
-      if (normalized) return normalized
-    }
-  } catch {
-    // La découverte est un confort : l'élève peut fournir l'adresse lui-même.
-  }
-  return null
+  const [first] = await discoverPronoteCandidates(jar, fetchImpl)
+  return first ?? null
 }
 
 /* ------------------------------------------------------------------ */
@@ -830,7 +976,7 @@ function clientRedirect(html, baseUrl) {
   for (const pattern of patterns) {
     const match = pattern.exec(html)
     if (!match) continue
-    const target = match[1].trim().replace(/&amp;/gi, '&').replace(/\\\//g, '/')
+    const target = match[1].trim().replace(/&amp;/gi, '&').replace(/\\+\//g, '/')
     if (!target || /^(?:javascript:|about:blank|#)/i.test(target)) continue
     try {
       return new URL(target, baseUrl).toString()
@@ -1095,11 +1241,13 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch, credenti
     )
   }
   if (!page.response.ok) {
+    // Le statut HTTP suffit à distinguer un mauvais hôte (404) d'un refus
+    // (403) sans révéler d'adresse ni de détail de configuration.
     throw new PronoteError(
       'PRONOTE_ACCESS',
       'PRONOTE n’a pas accepté la session MonLycée.',
       502,
-      'E5',
+      `E5-${page.response.status}`,
     )
   }
 
