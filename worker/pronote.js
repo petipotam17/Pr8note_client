@@ -334,6 +334,19 @@ function isEntHost(url) {
  * @param {string} method
  * @param {string} pathname
  */
+/**
+ * Un formulaire peut viser un autre sous-domaine que celui de l'élève ;
+ * certains n'existent plus. Le suffixe le signale sans nommer d'hôte :
+ * rien pour le même hôte, -A pour un autre hôte .net, -C pour .com.
+ *
+ * @param {string} host
+ * @param {string | undefined} entryHost
+ */
+function hostClassSuffix(host, entryHost) {
+  if (!entryHost || host === entryHost) return ''
+  return host.endsWith('.index-education.com') ? '-C' : '-A'
+}
+
 function e3RequestClass(method, pathname) {
   const letter = method === 'POST' ? 'P' : 'G'
   const path = String(pathname || '').toLowerCase()
@@ -452,7 +465,13 @@ async function fetchWithJar(url, init, jar, options) {
               ? 'Le portail MonLycée n’a pas pu être joint depuis Pr8note. Réessaie dans quelques minutes ; si cela persiste, ouvre PRONOTE depuis ton ENT une première fois.'
               : 'Impossible de joindre PRONOTE à cette adresse. Ouvre PRONOTE depuis ton ENT, copie l’adresse de la page et colle-la dans le champ « Adresse PRONOTE de ton lycée », puis réessaie.',
         502,
-        aborted ? 'E3-T' : dns ? 'E3-D' : entHop ? 'E3-E' : `E3-P${e3RequestClass(method, current.pathname)}`,
+        aborted
+          ? 'E3-T'
+          : dns
+            ? 'E3-D'
+            : entHop
+              ? 'E3-E'
+              : `E3-P${e3RequestClass(method, current.pathname)}${hostClassSuffix(host, options.entryHost)}`,
       )
     }
 
@@ -1166,6 +1185,33 @@ export async function readEntryPage(url, jar, options) {
       // lecture avant d'abandonner.
       const network = error instanceof PronoteError && /^E3-/.test(error.stage || '')
       if (verb !== 'POST' || !network) throw error
+      // Certains points d'entrée PRONOTE acceptent les mêmes champs en GET.
+      // On tente cette forme, uniquement si elle reste sur l'hôte de l'élève.
+      try {
+        const sameHost =
+          normalizeHost(new URL(current).hostname) === normalizeHost(new URL(url).hostname)
+        if (sameHost && body && body.length < 1500) {
+          const queryUrl = new URL(current)
+          for (const [key, value] of new URLSearchParams(body)) queryUrl.searchParams.set(key, value)
+          const attempt = await fetchWithJar(
+            queryUrl.toString(),
+            { method: 'GET', headers: HTML_HEADERS },
+            jar,
+            options,
+          )
+          const attemptHtml = await attempt.response.text()
+          const candidate = {
+            response: attempt.response,
+            finalUrl: attempt.finalUrl,
+            html: attemptHtml,
+            attributes: parseStartAttributes(attemptHtml),
+            logins,
+          }
+          if (candidate.attributes) return candidate
+        }
+      } catch {
+        // Le repli est une chance supplémentaire, jamais une obligation.
+      }
       const retry = await fetchWithJar(
         url,
         { method: 'GET', headers: HTML_HEADERS },
@@ -1234,7 +1280,7 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch, credenti
   const host = normalizeHost(new URL(normalized).hostname)
   if (typeof jar.allowHost === 'function') jar.allowHost(host)
   const allowedHosts = new Set([host])
-  const entryOptions = { fetchImpl, allowedHosts, credentials }
+  const entryOptions = { fetchImpl, allowedHosts, credentials, entryHost: host }
 
   const candidates = entryCandidates(normalized)
 

@@ -205,7 +205,7 @@ test('un échec réseau sur la première adresse essaie la suivante', async () =
 
   assert.equal(result.school, null)
   // L'hôte qui échoue ici est PRONOTE (pas le portail MonLycée) : E3-P…
-  assert.match(result.schoolError.stage, /^E3-P[GP][1-5]$/)
+  assert.match(result.schoolError.stage, /^E3-P[GP][1-5]/)
   assert.match(result.schoolError.message, / · code E3-P/)
   assert.match(result.schoolError.message, /2 adresses essayées/)
   assert.ok(

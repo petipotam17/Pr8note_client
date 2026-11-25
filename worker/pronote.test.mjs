@@ -786,8 +786,37 @@ test('un envoi de formulaire coupé ne condamne pas la session', async () => {
   assert.deepEqual(seen, [
     'GET /pronote/eleve.html',
     'POST /pronote/49c96cf991000e9a63de',
+    // Repli : la même action en GET, puis relecture de l'Espace élève.
+    'GET /pronote/49c96cf991000e9a63de',
     'GET /pronote/eleve.html',
   ])
+})
+
+test('un formulaire vers un autre sous-domaine est signalé', async () => {
+  const url = 'https://lycee.index-education.net/pronote/eleve.html'
+  const formPage = `<!doctype html><html><body>
+    <form method="post" action="https://sso.index-education.net/pronote/1a47d2c53f32af4eafb7">
+      <input type="hidden" name="jeton" value="abc" />
+    </form>
+  </body></html>`
+  const fetchImpl = async (input, init = {}) => {
+    if ((init.method || 'GET').toUpperCase() === 'POST') {
+      const failure = new TypeError('fetch failed')
+      failure.cause = { code: 'ECONNRESET', message: 'connection reset by peer' }
+      throw failure
+    }
+    return new Response(formPage, { status: 200, headers: { 'Content-Type': 'text/html' } })
+  }
+
+  const failure = await readEntryPage(url, new CookieJar(), {
+    fetchImpl,
+    allowedHosts: new Set(['lycee.index-education.net']),
+    entryHost: 'lycee.index-education.net',
+  }).catch((error) => error)
+
+  assert.ok(failure instanceof PronoteError)
+  // Le suffixe -A indique un autre hôte .net, sans le nommer.
+  assert.match(failure.stage, /^E3-PP5-1a47d2c53f32af4eafb7-A$/)
 })
 
 test('une page sans bloc Start demande de vérifier l’adresse PRONOTE', async () => {
