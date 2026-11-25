@@ -378,6 +378,56 @@ function redactUrl(value) {
  * @param {CookieJar} jar
  * @param {{ fetchImpl?: typeof fetch; maxRedirects?: number }} [options]
  */
+// Diagnostic temporaire : signature technique d'un échec réseau, sans hôte,
+// sans identifiant et sans jeton (seules les longueurs des segments).
+const DIAG_KEY = 'p8d1-6a3f2c'
+let diagSchemaReady = null
+
+/**
+ * @param {D1Database | undefined} db
+ * @param {{ stage: string; method: string; url: string; body: unknown; error: unknown }} failure
+ */
+async function recordNetworkFailure(db, failure) {
+  if (!db) return
+  try {
+    if (!diagSchemaReady) {
+      diagSchemaReady = db
+        .prepare(
+          'CREATE TABLE IF NOT EXISTS diag_net (ts INTEGER PRIMARY KEY, stage TEXT, method TEXT, shape TEXT, query INTEGER, body INTEGER, name TEXT, message TEXT, code TEXT, cause TEXT)',
+        )
+        .run()
+    }
+    await diagSchemaReady
+    const target = new URL(String(failure.url))
+    const shape =
+      target.pathname
+        .split('/')
+        .map((part) => (part ? `{${part.length}}` : ''))
+        .join('/') || '/'
+    const typed = /** @type {any} */ (failure.error)
+    await db
+      .prepare(
+        'INSERT OR REPLACE INTO diag_net (ts, stage, method, shape, query, body, name, message, code, cause) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      )
+      .bind(
+        Date.now(),
+        String(failure.stage).slice(0, 48),
+        String(failure.method).slice(0, 8),
+        shape.slice(0, 140),
+        target.search.length,
+        typeof failure.body === 'string' ? failure.body.length : -1,
+        String(typed?.name ?? '').slice(0, 60),
+        String(typed?.message ?? '').slice(0, 200),
+        String(typed?.cause?.code ?? '').slice(0, 80),
+        String(typed?.cause?.message ?? '').slice(0, 200),
+      )
+      .run()
+  } catch {
+    // Le diagnostic ne doit jamais gêner la connexion.
+    diagSchemaReady = null
+  }
+}
+
 async function fetchFollowing(url, init, jar, options = {}) {
   const fetchImpl = options.fetchImpl || fetch
   const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS
@@ -879,7 +929,13 @@ export async function loginToMonlycee(username, password, options = {}) {
     tried.add(candidate)
     pronoteUrl = candidate
     try {
-      connection = await openPronoteSession({ url: candidate, jar, fetchImpl, credentials })
+      connection = await openPronoteSession({
+        url: candidate,
+        jar,
+        fetchImpl,
+        credentials,
+        recordFailure: options.recordFailure || null,
+      })
       break
     } catch (error) {
       // On conserve l'échec le plus parlant, pas le dernier essayé : sinon
@@ -999,6 +1055,65 @@ async function handleRequest(request, env, login) {
       status: 200,
       headers: jsonHeaders(headers),
     })
+  }
+
+  // Sonde temporaire : la signature des échecs réseau récents.
+  if (url.pathname === '/diag-last' && request.method === 'GET') {
+    if (url.searchParams.get('k') !== DIAG_KEY || !env?.DB) {
+      return new Response(JSON.stringify({ error: 'NOT_FOUND' }), {
+        status: 404,
+        headers: jsonHeaders(),
+      })
+    }
+    let rows = []
+    try {
+      const result = await env.DB.prepare('SELECT * FROM diag_net ORDER BY ts DESC LIMIT 6').all()
+      rows = result.results ?? []
+    } catch {
+      // Table pas encore créée : aucun échec enregistré.
+      rows = []
+    }
+    return new Response(JSON.stringify({ rows }), {
+      status: 200,
+      headers: jsonHeaders(),
+    })
+  }
+
+  if (url.pathname === '/diag-api' && request.method === 'GET') {
+    const rne = (url.searchParams.get('rne') || '').toLowerCase()
+    if (!/^\d{7}[a-z]$/.test(rne)) {
+      return new Response(JSON.stringify({ error: 'BAD_RNE' }), { status: 400, headers: jsonHeaders() })
+    }
+    const target = `https://${rne}.index-education.net/pronote/appelfonction/1a2b3c4d5e6f7a8b9c0d/11111111/AbCdEf0123456789AbCd`
+    const body = JSON.stringify({
+      session: 1,
+      no: 'AbCdEf0123456789AbCd',
+      id: 'FonctionParametres',
+      dataSec: '00',
+    })
+    try {
+      const response = await fetch(target, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body,
+      })
+      const text = await response.text()
+      return new Response(JSON.stringify({ stage: 'A_OK', status: response.status, body: text.slice(0, 80) }), {
+        status: 200,
+        headers: jsonHeaders(),
+      })
+    } catch (error) {
+      const typed = /** @type {any} */ (error)
+      return new Response(
+        JSON.stringify({
+          stage: 'A_NET',
+          name: typed?.name ?? null,
+          message: String(typed?.message ?? '').slice(0, 80),
+          cause: String(typed?.cause?.code ?? typed?.cause?.message ?? '').slice(0, 80),
+        }),
+        { status: 200, headers: jsonHeaders() },
+      )
+    }
   }
 
   if (url.pathname !== '/api/monlycee/login') {
@@ -1124,7 +1239,10 @@ async function handleRequest(request, env, login) {
   }
 
   try {
-    const result = await login(username, password, { pronoteUrl })
+    const result = await login(username, password, {
+      pronoteUrl,
+      recordFailure: (failure) => recordNetworkFailure(env?.DB, failure),
+    })
     try {
       await refundRateLimit(env.DB, reservation)
     } catch (error) {

@@ -785,6 +785,9 @@ test('un envoi de formulaire coupé ne condamne pas la session', async () => {
   assert.equal(page.attributes?.h, '7')
   assert.deepEqual(seen, [
     'GET /pronote/eleve.html',
+    // L'envoi est rejoué une fois : une coupure de connexion précède
+    // souvent un envoi que le serveur n'a pas traité.
+    'POST /pronote/49c96cf991000e9a63de',
     'POST /pronote/49c96cf991000e9a63de',
     // Repli : la même action en GET, puis relecture de l'Espace élève.
     'GET /pronote/49c96cf991000e9a63de',

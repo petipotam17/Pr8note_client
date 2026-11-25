@@ -424,10 +424,11 @@ async function fetchWithJar(url, init, jar, options) {
 
     let response
     let fetchFailure = null
-    // Une lecture peut être coupée par la protection du site (reset
-    // transitoire) : une seconde connexion suffit souvent. On ne rejoue
-    // jamais un POST, et jamais après un délai dépassé.
-    const attempts = method === 'GET' || method === 'HEAD' ? 2 : 1
+    // Une requête peut être coupée par la protection du site (reset
+    // transitoire) : une seconde connexion suffit souvent. On rejoue donc
+    // une fois une lecture comme un envoi, mais jamais après un délai
+    // dépassé : là, le serveur a peut-être déjà traité la demande.
+    const attempts = method === 'GET' || method === 'HEAD' || method === 'POST' ? 2 : 1
     for (let attempt = 0; attempt < attempts && !response; attempt += 1) {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), PRONOTE_TIMEOUT_MS)
@@ -460,6 +461,20 @@ async function fetchWithJar(url, init, jar, options) {
       // inexistant (E3-D) ne se corrige pas en réessayant, et un PRONOTE
       // lent (E3-T) demande juste du temps.
       const entHop = isEntHostname(host)
+      const stage = aborted
+        ? 'E3-T'
+        : dns
+          ? 'E3-D'
+          : entHop
+            ? 'E3-E'
+            : `E3-P${e3RequestClass(method, current.pathname)}${hostClassSuffix(host, options.entryHost)}#${kind}`
+      if (typeof options.recordFailure === 'function') {
+        try {
+          options.recordFailure({ stage, method, url: current.toString(), body, error })
+        } catch {
+          // Le diagnostic ne doit jamais gêner la connexion.
+        }
+      }
       throw new PronoteError(
         aborted ? 'PRONOTE_TIMEOUT' : dns ? 'PRONOTE_DNS' : 'PRONOTE_NETWORK',
         aborted
@@ -470,13 +485,7 @@ async function fetchWithJar(url, init, jar, options) {
               ? 'Le portail MonLycée n’a pas pu être joint depuis Pr8note. Réessaie dans quelques minutes ; si cela persiste, ouvre PRONOTE depuis ton ENT une première fois.'
               : 'Impossible de joindre PRONOTE à cette adresse. Ouvre PRONOTE depuis ton ENT, copie l’adresse de la page et colle-la dans le champ « Adresse PRONOTE de ton lycée », puis réessaie.',
         502,
-        aborted
-          ? 'E3-T'
-          : dns
-            ? 'E3-D'
-            : entHop
-              ? 'E3-E'
-              : `E3-P${e3RequestClass(method, current.pathname)}${hostClassSuffix(host, options.entryHost)}#${kind}`,
+        stage,
       )
     }
 
@@ -780,6 +789,7 @@ class PronoteSession {
     this.fetchImpl = config.fetchImpl
     this.jar = config.jar
     this.allowedHosts = config.allowedHosts
+    this.recordFailure = config.recordFailure || null
     this.order = 1
     this.deadline = Date.now() + PRONOTE_SYNC_BUDGET_MS
     this.aesKey = md5(new Uint8Array(0))
@@ -880,7 +890,11 @@ class PronoteSession {
         body: JSON.stringify(body),
       },
       this.jar,
-      { fetchImpl: this.fetchImpl, allowedHosts: this.allowedHosts },
+      {
+        fetchImpl: this.fetchImpl,
+        allowedHosts: this.allowedHosts,
+        recordFailure: this.recordFailure,
+      },
     )
 
     this.order += 2
@@ -1280,7 +1294,13 @@ export async function readEntryPage(url, jar, options) {
  * @param {{ headerFor(url: string): string; absorb(response: Response, url: string): void; allowHost?(host: string): void }} config.jar
  * @param {typeof fetch} [config.fetchImpl]
  */
-export async function openPronoteSession({ url, jar, fetchImpl = fetch, credentials = null }) {
+export async function openPronoteSession({
+  url,
+  jar,
+  fetchImpl = fetch,
+  credentials = null,
+  recordFailure = null,
+}) {
   const normalized = normalizePronoteUrl(url)
   if (!normalized)
     throw new PronoteError('PRONOTE_URL', 'L’adresse PRONOTE n’est pas valide.', 502, 'E1')
@@ -1288,7 +1308,7 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch, credenti
   const host = normalizeHost(new URL(normalized).hostname)
   if (typeof jar.allowHost === 'function') jar.allowHost(host)
   const allowedHosts = new Set([host])
-  const entryOptions = { fetchImpl, allowedHosts, credentials, entryHost: host }
+  const entryOptions = { fetchImpl, allowedHosts, credentials, entryHost: host, recordFailure }
 
   const candidates = entryCandidates(normalized)
 
@@ -1404,6 +1424,7 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch, credenti
     fetchImpl,
     jar,
     allowedHosts,
+    recordFailure,
   })
 
   const options = await session.request('FonctionParametres', {
