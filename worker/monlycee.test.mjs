@@ -211,3 +211,36 @@ test('un échec réseau sur la première adresse essaie la suivante', async () =
     `une seule adresse essayée : ${pronoteCalls.join(', ')}`,
   )
 })
+
+test('un domaine PRONOTE introuvable se distingue et demande l’adresse', async () => {
+  const base = mockFetch()
+  const fetchImpl = async (url, init = {}) => {
+    const target = String(url)
+    if (target.includes('index-education.net')) {
+      const failure = new TypeError('fetch failed')
+      // Forme renvoyée par le runtime quand le nom de domaine n'existe pas.
+      failure.cause = { code: 'ENOTFOUND', message: 'DNS record not found' }
+      throw failure
+    }
+    if (target === 'https://psn.monlycee.net/') {
+      return response(200, {
+        body: `<!doctype html><html><body>
+          <a href="https://0751234a.index-education.net/pronote/eleve.html">PRONOTE</a>
+        </body></html>`,
+      })
+    }
+    return base.fetchImpl(url, init)
+  }
+
+  const result = await loginToMonlycee('camille.durand', 'secret', {
+    fetchImpl,
+    startUrl: START,
+  })
+
+  assert.equal(result.school, null)
+  assert.equal(result.schoolError.stage, 'E3-D')
+  assert.match(result.schoolError.message, / · code E3-D/)
+  assert.match(result.schoolError.message, /Adresse PRONOTE de ton lycée/)
+  // Ni hôte ni RNE ne doivent apparaître dans le message.
+  assert.doesNotMatch(result.schoolError.message, /index-education|0751234/i)
+})

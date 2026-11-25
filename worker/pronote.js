@@ -78,7 +78,8 @@ export function describePronoteError(error) {
  *   E0 erreur interne inattendue (aucune étape PRONOTE reconnue)
  *   E1 adresse fournie invalide
  *   E2 redirection hors ENT/PRONOTE
- *   E3-N hôte PRONOTE injoignable (DNS, TLS, connexion refusée)
+ *   E3-D domaine PRONOTE introuvable (aucun serveur à cette adresse)
+ *   E3-N hôte PRONOTE injoignable (TLS, connexion refusée)
  *   E3-T délai dépassé en attendant PRONOTE
  *   E4 trop de redirections
  *   E5 PRONOTE a refusé la session
@@ -323,6 +324,21 @@ function isEntHost(url) {
 }
 
 /**
+ * Distingue « ce nom de domaine n’existe pas » d’une panne réseau
+ * quelconque. Cloudflare Workers renvoie un TypeError « fetch failed » dont
+ * la cause porte le code DNS ; on ne classe en E3-D que sur ces marqueurs,
+ * jamais d’après le nom d’hôte (qui ne doit pas parvenir à l’élève).
+ *
+ * @param {unknown} error
+ */
+function isDnsFailure(error) {
+  if (!(error instanceof Error)) return false
+  const cause = /** @type {{ code?: unknown; message?: unknown } | undefined} */ (error.cause)
+  const detail = `${String(cause?.code ?? '')} ${String(cause?.message ?? '')} ${error.message}`
+  return /ENOTFOUND|EAI_AGAIN|ENODATA|DNS|name resolution|resolve host/i.test(detail)
+}
+
+/**
  * Suit les redirections en conservant les cookies du portail MonLycée.
  * Seuls les hôtes explicitement autorisés sont contactés.
  *
@@ -374,16 +390,19 @@ async function fetchWithJar(url, init, jar, options) {
       })
     } catch (error) {
       const aborted = error instanceof Error && error.name === 'AbortError'
-      // Deux causes très différentes : un hôte qui ne résout pas ou refuse la
-      // connexion (E3-N) n'est pas un PRONOTE lent (E3-T). Les distinguer
-      // évite d'augmenter les délais quand le problème est l'adresse.
+      const dns = !aborted && isDnsFailure(error)
+      // Trois causes très différentes : un domaine qui n'existe pas (E3-D)
+      // ne se corrige pas en réessayant, un hôte injoignable (E3-N) peut se
+      // débloquer, et un PRONOTE lent (E3-T) demande juste du temps.
       throw new PronoteError(
-        aborted ? 'PRONOTE_TIMEOUT' : 'PRONOTE_NETWORK',
+        aborted ? 'PRONOTE_TIMEOUT' : dns ? 'PRONOTE_DNS' : 'PRONOTE_NETWORK',
         aborted
           ? 'PRONOTE met trop de temps à répondre. Réessaie dans quelques instants.'
-          : 'Impossible de joindre PRONOTE pour le moment. Réessaie dans quelques instants.',
+          : dns
+            ? 'L’adresse PRONOTE ne mène à aucun serveur (domaine introuvable). Ouvre PRONOTE depuis ton ENT, copie l’adresse de la page et colle-la dans le champ « Adresse PRONOTE de ton lycée ».'
+            : 'Impossible de joindre PRONOTE à cette adresse. Ouvre PRONOTE depuis ton ENT, copie l’adresse de la page et colle-la dans le champ « Adresse PRONOTE de ton lycée », puis réessaie.',
         502,
-        aborted ? 'E3-T' : 'E3-N',
+        aborted ? 'E3-T' : dns ? 'E3-D' : 'E3-N',
       )
     } finally {
       clearTimeout(timer)
