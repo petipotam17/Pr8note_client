@@ -50,14 +50,47 @@ export class PronoteError extends Error {
    * @param {string} code
    * @param {string} message
    * @param {number} [status]
+   * @param {string} [stage] Code d'étape court, affiché à l'élève.
    */
-  constructor(code, message, status = 502) {
+  constructor(code, message, status = 502, stage = '') {
     super(message)
     this.name = 'PronoteError'
     this.code = code
     this.status = status
+    this.stage = stage
   }
 }
+
+/**
+ * Message affiché à l'élève : le code d'étape est ajouté à la fin pour qu'il
+ * puisse être recopié tel quel.
+ *
+ * @param {PronoteError} error
+ */
+export function describePronoteError(error) {
+  return error.stage ? `${error.message} · code ${error.stage}` : error.message
+}
+
+/*
+ * Codes d'étape renvoyés avec l'erreur. Ils sont courts et ne contiennent ni
+ * hôte, ni identifiant, ni adresse IP, ni détail de configuration :
+ *
+ *   E1 adresse fournie invalide
+ *   E2 redirection hors ENT/PRONOTE
+ *   E3 réseau ou délai dépassé
+ *   E4 trop de redirections
+ *   E5 PRONOTE a refusé la session
+ *   E6 MonLycée n'a pas transmis la session PRONOTE
+ *   E7 PRONOTE demande sa propre connexion
+ *   E8 PRONOTE bloque les connexions
+ *   E9 page PRONOTE sans bloc Start
+ *   W1 PRONOTE refuse ce compte
+ *   W2 vérification en deux étapes demandée
+ *   W3 session PRONOTE expirée
+ *   W4 PRONOTE limite les connexions
+ *   W5 réponse PRONOTE illisible ou trop lente
+ *   W6 lecture des données refusée
+ */
 
 /* ------------------------------------------------------------------ */
 /* MD5 — Web Crypto ne fournit pas MD5, PRONOTE l'utilise pour ses clés. */
@@ -166,11 +199,13 @@ function bytesToHex(bytes) {
 /** @param {string} hex */
 function hexToBytes(hex) {
   const clean = hex.trim()
-  if (clean.length % 2 !== 0) throw new PronoteError('PRONOTE_FORMAT', 'Réponse PRONOTE illisible.')
+  if (clean.length % 2 !== 0)
+    throw new PronoteError('PRONOTE_FORMAT', 'Réponse PRONOTE illisible.', 502, 'W5')
   const output = new Uint8Array(clean.length / 2)
   for (let index = 0; index < output.length; index += 1) {
     const value = Number.parseInt(clean.slice(index * 2, index * 2 + 2), 16)
-    if (!Number.isFinite(value)) throw new PronoteError('PRONOTE_FORMAT', 'Réponse PRONOTE illisible.')
+    if (!Number.isFinite(value))
+      throw new PronoteError('PRONOTE_FORMAT', 'Réponse PRONOTE illisible.', 502, 'W5')
     output[index] = value
   }
   return output
@@ -231,7 +266,12 @@ async function aesDecrypt(key, iv, data) {
     const result = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, cryptoKey, data)
     return new Uint8Array(result)
   } catch {
-    throw new PronoteError('PRONOTE_CRYPTO', 'PRONOTE a refusé le chiffrement de la session.')
+    throw new PronoteError(
+      'PRONOTE_CRYPTO',
+      'PRONOTE a refusé le chiffrement de la session.',
+      502,
+      'W5',
+    )
   }
 }
 
@@ -302,10 +342,15 @@ async function fetchWithJar(url, init, jar, options) {
     }
     const host = normalizeHost(current.hostname)
     if (current.protocol !== 'https:') {
-      throw new PronoteError('PRONOTE_URL', 'L’adresse PRONOTE doit utiliser HTTPS.')
+      throw new PronoteError('PRONOTE_URL', 'L’adresse PRONOTE doit utiliser HTTPS.', 502, 'E2')
     }
     if (!isTrustedHost(host, allowedHosts)) {
-      throw new PronoteError('PRONOTE_URL', 'PRONOTE a redirigé vers un service non autorisé.')
+      throw new PronoteError(
+        'PRONOTE_URL',
+        'PRONOTE a redirigé vers un service non autorisé.',
+        502,
+        'E2',
+      )
     }
 
     const headers = new Headers(init.headers || {})
@@ -332,6 +377,8 @@ async function fetchWithJar(url, init, jar, options) {
         aborted
           ? 'PRONOTE met trop de temps à répondre. Réessaie dans quelques instants.'
           : 'Impossible de joindre PRONOTE pour le moment. Réessaie dans quelques instants.',
+        502,
+        'E3',
       )
     } finally {
       clearTimeout(timer)
@@ -345,7 +392,12 @@ async function fetchWithJar(url, init, jar, options) {
       try {
         next = new URL(location, current)
       } catch {
-        throw new PronoteError('PRONOTE_REDIRECT', 'PRONOTE a renvoyé une redirection invalide.')
+        throw new PronoteError(
+          'PRONOTE_REDIRECT',
+          'PRONOTE a renvoyé une redirection invalide.',
+          502,
+          'E4',
+        )
       }
       if (response.status === 303 || (response.status === 302 && method === 'POST')) {
         method = 'GET'
@@ -358,7 +410,12 @@ async function fetchWithJar(url, init, jar, options) {
     return { response, finalUrl: current.toString() }
   }
 
-  throw new PronoteError('PRONOTE_REDIRECT', 'PRONOTE a interrompu la connexion (trop de redirections).')
+  throw new PronoteError(
+    'PRONOTE_REDIRECT',
+    'PRONOTE a interrompu la connexion (trop de redirections).',
+    502,
+    'E4',
+  )
 }
 
 /* ------------------------------------------------------------------ */
@@ -561,6 +618,9 @@ class PronoteSession {
     this.aesIv = new Uint8Array(16)
     this.spread = atLeast(this.version, [2024, 3, 9])
     this.newEnvelope = atLeast(this.version, [2025, 1, 3])
+    // « login » pendant l'ouverture de session, « data » ensuite : le même
+    // refus de PRONOTE ne signifie pas la même chose aux deux étapes.
+    this.phase = 'login'
 
     const crA = config.attributes.CrA
     const coA = config.attributes.CoA
@@ -608,6 +668,8 @@ class PronoteSession {
       throw new PronoteError(
         'PRONOTE_TIMEOUT',
         'La synchronisation PRONOTE a pris trop de temps. Réessaie dans quelques instants.',
+        502,
+        'W5',
       )
     }
     const signatureKey = this.spread ? 'Signature' : '_Signature_'
@@ -662,7 +724,7 @@ class PronoteSession {
     try {
       raw = await response.text()
     } catch {
-      throw new PronoteError('PRONOTE_FORMAT', 'PRONOTE a renvoyé une réponse illisible.')
+      throw new PronoteError('PRONOTE_FORMAT', 'PRONOTE a renvoyé une réponse illisible.', 502, 'W5')
     }
 
     let envelope
@@ -670,20 +732,40 @@ class PronoteSession {
       envelope = JSON.parse(raw)
     } catch {
       if (/adresse IP/i.test(raw)) {
-        throw new PronoteError('PRONOTE_BLOCKED', 'PRONOTE bloque temporairement cette adresse.')
+        throw new PronoteError(
+          'PRONOTE_BLOCKED',
+          'PRONOTE bloque temporairement cette adresse.',
+          502,
+          'E8',
+        )
       }
-      throw new PronoteError('PRONOTE_FORMAT', 'PRONOTE a renvoyé une réponse inattendue.')
+      throw new PronoteError('PRONOTE_FORMAT', 'PRONOTE a renvoyé une réponse inattendue.', 502, 'W5')
     }
 
     if (envelope?.Erreur) {
       const code = Number(envelope.Erreur.G)
       if (code === 22) {
-        throw new PronoteError('PRONOTE_EXPIRED', 'La session PRONOTE a expiré. Reconnecte-toi.')
+        throw new PronoteError(
+          'PRONOTE_EXPIRED',
+          'La session PRONOTE a expiré. Reconnecte-toi.',
+          502,
+          'W3',
+        )
       }
       if (code === 25) {
-        throw new PronoteError('PRONOTE_BUSY', 'PRONOTE limite temporairement les connexions.')
+        throw new PronoteError(
+          'PRONOTE_BUSY',
+          'PRONOTE limite temporairement les connexions.',
+          502,
+          'W4',
+        )
       }
-      throw new PronoteError('PRONOTE_REFUSED', 'PRONOTE a refusé la demande.')
+      throw new PronoteError(
+        'PRONOTE_REFUSED',
+        'PRONOTE a refusé la demande.',
+        502,
+        this.phase === 'data' ? 'W6' : 'W1',
+      )
     }
 
     let secureData = envelope?.dataSec ?? envelope?.donneesSec
@@ -699,16 +781,31 @@ class PronoteSession {
         try {
           secureData = JSON.parse(new TextDecoder().decode(hexToBytes(text)))
         } catch {
-          throw new PronoteError('PRONOTE_FORMAT', 'PRONOTE a renvoyé des données illisibles.')
+          throw new PronoteError(
+            'PRONOTE_FORMAT',
+            'PRONOTE a renvoyé des données illisibles.',
+            502,
+            'W5',
+          )
         }
       }
     }
 
     if (!secureData || typeof secureData !== 'object') {
-      throw new PronoteError('PRONOTE_FORMAT', 'PRONOTE n’a pas renvoyé les données attendues.')
+      throw new PronoteError(
+        'PRONOTE_FORMAT',
+        'PRONOTE n’a pas renvoyé les données attendues.',
+        502,
+        'W5',
+      )
     }
     if (secureData[signatureKey]?.Erreur) {
-      throw new PronoteError('PRONOTE_REFUSED', 'PRONOTE a refusé la demande.')
+      throw new PronoteError(
+        'PRONOTE_REFUSED',
+        'PRONOTE a refusé la demande.',
+        502,
+        this.phase === 'data' ? 'W6' : 'W1',
+      )
     }
     return secureData
   }
@@ -939,7 +1036,8 @@ async function readEntryPage(url, jar, options) {
  */
 export async function openPronoteSession({ url, jar, fetchImpl = fetch, credentials = null }) {
   const normalized = normalizePronoteUrl(url)
-  if (!normalized) throw new PronoteError('PRONOTE_URL', 'L’adresse PRONOTE n’est pas valide.')
+  if (!normalized)
+    throw new PronoteError('PRONOTE_URL', 'L’adresse PRONOTE n’est pas valide.', 502, 'E1')
 
   const host = normalizeHost(new URL(normalized).hostname)
   if (typeof jar.allowHost === 'function') jar.allowHost(host)
@@ -992,10 +1090,17 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch, credenti
     throw new PronoteError(
       'PRONOTE_REDIRECT',
       'PRONOTE a interrompu la connexion (trop de redirections).',
+      502,
+      'E4',
     )
   }
   if (!page.response.ok) {
-    throw new PronoteError('PRONOTE_ACCESS', 'PRONOTE n’a pas accepté la session MonLycée.')
+    throw new PronoteError(
+      'PRONOTE_ACCESS',
+      'PRONOTE n’a pas accepté la session MonLycée.',
+      502,
+      'E5',
+    )
   }
 
   const attributes = page.attributes
@@ -1004,29 +1109,39 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch, credenti
       throw new PronoteError(
         'PRONOTE_BLOCKED',
         'PRONOTE bloque temporairement les connexions. Réessaie dans quelques minutes.',
+        502,
+        'E8',
       )
     }
     if (isEntHost(page.finalUrl)) {
       throw new PronoteError(
         'PRONOTE_ACCESS',
         'MonLycée n’a pas transmis la session PRONOTE. Ouvre PRONOTE depuis ton ENT une première fois, puis réessaie.',
+        502,
+        'E6',
       )
     }
     if (/mot de passe|identifiant|connexion/i.test(page.html)) {
       throw new PronoteError(
         'PRONOTE_ACCESS',
         'PRONOTE demande une connexion séparée. Vérifie que l’accès PRONOTE est bien ouvert depuis ton ENT.',
+        502,
+        'E7',
       )
     }
     throw new PronoteError(
       'PRONOTE_PAGE',
       'PRONOTE a répondu sans ouvrir l’Espace élève. Vérifie l’adresse PRONOTE de ton lycée (elle finit par /pronote/eleve.html) puis réessaie.',
+      502,
+      'E9',
     )
   }
   if (!attributes.e || !attributes.f) {
     throw new PronoteError(
       'PRONOTE_ACCESS',
       'MonLycée n’a pas transmis la session PRONOTE. Ouvre PRONOTE depuis ton ENT puis réessaie.',
+      502,
+      'E6',
     )
   }
 
@@ -1064,7 +1179,12 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch, credenti
 
   const challenge = identification?.data?.challenge ?? identification?.donnees?.challenge
   if (!challenge) {
-    throw new PronoteError('PRONOTE_LOGIN', 'PRONOTE n’a pas ouvert de session pour ce compte.')
+    throw new PronoteError(
+      'PRONOTE_LOGIN',
+      'PRONOTE n’a pas ouvert de session pour ce compte.',
+      502,
+      'W1',
+    )
   }
 
   const passwordDigest = new Uint8Array(
@@ -1106,7 +1226,7 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch, credenti
   const authData = authentication?.data ?? authentication?.donnees ?? {}
   const access = Number(authData.Acces)
   if (Number.isFinite(access) && access !== 0) {
-    throw new PronoteError('PRONOTE_LOGIN', 'PRONOTE a refusé la session de cet élève.')
+    throw new PronoteError('PRONOTE_LOGIN', 'PRONOTE a refusé la session de cet élève.', 502, 'W1')
   }
   const doubleAuth = authData.actionsDoubleAuth
   if (doubleAuth) {
@@ -1120,19 +1240,26 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch, credenti
       throw new PronoteError(
         'PRONOTE_MFA',
         'PRONOTE demande une vérification en deux étapes. Ouvre PRONOTE pour l’accepter une fois.',
+        502,
+        'W2',
       )
     }
   }
 
   const key = authData.cle
   if (!key) {
-    throw new PronoteError('PRONOTE_LOGIN', 'PRONOTE a refusé la session de cet élève.')
+    throw new PronoteError('PRONOTE_LOGIN', 'PRONOTE a refusé la session de cet élève.', 502, 'W1')
   }
 
   const cleBytes = await aesDecrypt(loginKey, session.aesIv, hexToBytes(String(key)))
   const cleText = new TextDecoder().decode(cleBytes).trim()
   if (!/^\d+(,\d+)*$/.test(cleText)) {
-    throw new PronoteError('PRONOTE_LOGIN', 'PRONOTE a renvoyé une clé de session inattendue.')
+    throw new PronoteError(
+      'PRONOTE_LOGIN',
+      'PRONOTE a renvoyé une clé de session inattendue.',
+      502,
+      'W1',
+    )
   }
   // PRONOTE fournit les octets de la clé séparés par des virgules ; la clé
   // AES suivante est le MD5 de ces octets.
@@ -1141,9 +1268,15 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch, credenti
   const parameters = await session.request('ParametresUtilisateur', {})
   const parameterData = parameters?.data ?? parameters?.donnees ?? {}
   if (!parameterData.ressource) {
-    throw new PronoteError('PRONOTE_LOGIN', 'PRONOTE n’a pas transmis le profil de l’élève.')
+    throw new PronoteError(
+      'PRONOTE_LOGIN',
+      'PRONOTE n’a pas transmis le profil de l’élève.',
+      502,
+      'W1',
+    )
   }
 
+  session.phase = 'data'
   return {
     session,
     attributes,

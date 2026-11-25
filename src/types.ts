@@ -181,6 +181,8 @@ export interface SchoolData {
 
 export interface SchoolError {
   code: string
+  /** Code d'étape court (E1…E9, W1…W6), sans donnée sensible. */
+  stage?: string
   message: string
 }
 

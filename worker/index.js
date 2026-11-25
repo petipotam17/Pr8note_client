@@ -23,6 +23,7 @@ import {
 } from './rateLimit.js'
 import {
   PronoteError,
+  describePronoteError,
   discoverPronoteUrl,
   fetchSchoolData,
   normalizePronoteUrl,
@@ -793,6 +794,7 @@ export async function loginToMonlycee(username, password, options = {}) {
     if (typeof console !== 'undefined' && console.error) {
       console.error('PRONOTE sync failed:', {
         code: error instanceof PronoteError ? error.code : 'UNKNOWN',
+        stage: error instanceof PronoteError ? error.stage || null : null,
         name: error instanceof Error ? error.name : 'unknown',
         message: error instanceof Error ? error.message : String(error),
       })
@@ -804,9 +806,12 @@ export async function loginToMonlycee(username, password, options = {}) {
       pronoteUrl,
       schoolError: {
         code: error instanceof PronoteError ? error.code : 'PRONOTE_UNAVAILABLE',
+        // Code d'étape court (E1…E9, W1…W6) : il indique où la connexion
+        // s'est arrêtée sans révéler d'hôte, d'identifiant ni de détail.
+        stage: error instanceof PronoteError ? error.stage || null : null,
         message:
           error instanceof PronoteError
-            ? error.message
+            ? describePronoteError(error)
             : 'PRONOTE n’a pas pu être synchronisé. Réessaie dans quelques instants.',
       },
     }

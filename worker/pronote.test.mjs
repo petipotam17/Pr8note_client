@@ -3,6 +3,7 @@ import test from 'node:test'
 import { createCipheriv, createDecipheriv, createHash } from 'node:crypto'
 import { deflateRawSync, inflateRawSync } from 'node:zlib'
 import {
+  describePronoteError,
   fetchSchoolData,
   md5Hex,
   normalizePronoteUrl,
@@ -600,6 +601,7 @@ test('un refus d’accès PRONOTE remonte une erreur générique', async () => {
     (error) =>
       error instanceof PronoteError &&
       error.code === 'PRONOTE_ACCESS' &&
+      error.stage === 'E5' &&
       !/403|index-education|secret-ent/i.test(error.message),
   )
 
@@ -672,18 +674,18 @@ test('une connexion ENT redemandée à l’ouverture de PRONOTE est rejouée', a
 
 test('sans identifiants, la connexion redemandée par l’ENT reste un refus explicite', async () => {
   const fake = createFakePronote({ entry: 'ent-login' })
-  await assert.rejects(
-    () =>
-      fetchSchoolData({
-        url: 'https://lycee.index-education.net/pronote/eleve.html',
-        jar,
-        fetchImpl: fake.fetchImpl,
-      }),
-    (error) =>
-      error instanceof PronoteError &&
-      error.code === 'PRONOTE_ACCESS' &&
-      !/mot-de-passe-ent|psn\.monlycee/i.test(error.message),
-  )
+  const failure = await fetchSchoolData({
+    url: 'https://lycee.index-education.net/pronote/eleve.html',
+    jar,
+    fetchImpl: fake.fetchImpl,
+  }).catch((error) => error)
+
+  assert.ok(failure instanceof PronoteError)
+  assert.equal(failure.code, 'PRONOTE_ACCESS')
+  // E6 : MonLycée n'a pas transmis la session PRONOTE.
+  assert.equal(failure.stage, 'E6')
+  assert.match(describePronoteError(failure), / · code E6$/)
+  assert.ok(!/mot-de-passe-ent|psn\.monlycee/i.test(describePronoteError(failure)))
 })
 
 test('une redirection vers un alias PRONOTE du même domaine est suivie', async () => {
@@ -709,6 +711,7 @@ test('une page sans bloc Start demande de vérifier l’adresse PRONOTE', async 
     (error) =>
       error instanceof PronoteError &&
       error.code === 'PRONOTE_PAGE' &&
+      error.stage === 'E9' &&
       /adresse PRONOTE/i.test(error.message) &&
       !/index-education|secret-ent/i.test(error.message),
   )
