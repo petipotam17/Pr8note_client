@@ -646,7 +646,8 @@ async function readIdentity(jar, username, fetchImpl = fetch) {
   return { student: studentFromPayload(username, []), uai: '' }
 }
 
-const MAX_SCHOOL_ATTEMPTS = 3
+// Deux candidats au maximum : la tuile PRONOTE et l'adresse déduite du RNE.
+const MAX_SCHOOL_ATTEMPTS = 2
 // Budget total des essais d'adresses : au-delà, on rend la main à l'élève
 // plutôt que de laisser la requête traîner.
 const SCHOOL_ATTEMPTS_BUDGET_MS = 30_000

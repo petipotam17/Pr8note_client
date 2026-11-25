@@ -782,17 +782,12 @@ function createFakePortal(pages) {
   return { fetchImpl, calls }
 }
 
-test('la découverte suit la page de services et garde le lien signé', async () => {
+test('la découverte garde le lien signé de la tuile PRONOTE', async () => {
   const portal = createFakePortal({
     'https://psn.monlycee.net/': {
       body: `<!doctype html><html><body>
-        <a href="/services"><span>Mes services</span></a>
-      </body></html>`,
-    },
-    '/services': {
-      body: `<!doctype html><html><body>
         <a href="https://0751234a.index-education.net/pronote/eleve.html?sso=jeton-signe">
-          <img src="pronote.svg"><span>PRONOTE</span>
+          <span>PRONOTE</span>
         </a>
       </body></html>`,
     },
@@ -803,20 +798,8 @@ test('la découverte suit la page de services et garde le lien signé', async ()
     candidates[0],
     'https://0751234a.index-education.net/pronote/eleve.html?sso=jeton-signe',
   )
-  assert.ok(portal.calls.includes('https://psn.monlycee.net/services'))
-})
-
-test('une tuile PRONOTE relative sur le portail devient une adresse complète', async () => {
-  const portal = createFakePortal({
-    'https://psn.monlycee.net/': {
-      body: `<!doctype html><html><body>
-        <a href="/pronote/acces?ticket=abc">PRONOTE</a>
-      </body></html>`,
-    },
-  })
-
-  const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl)
-  assert.equal(candidates[0], 'https://psn.monlycee.net/pronote/acces?ticket=abc')
+  // Une seule page est lue : plus d'exploration du portail.
+  assert.equal(portal.calls.length, 1)
 })
 
 test('une tuile PRONOTE en image mène au lanceur du portail', async () => {
@@ -830,18 +813,13 @@ test('une tuile PRONOTE en image mène au lanceur du portail', async () => {
   assert.equal(candidates[0], 'https://psn.monlycee.net/sg/app/42')
 })
 
-test('la découverte lit aussi les listes JSON du portail', async () => {
+test('les liens PRONOTE échappés en JSON sont lus', async () => {
   const portal = createFakePortal({
     'https://psn.monlycee.net/': {
-      body: `<!doctype html><html><body><a href="/api/services">Services</a></body></html>`,
-    },
-    '/api/services': {
-      type: 'application/json',
-      body: JSON.stringify({
-        applications: [
-          { nom: 'PRONOTE', url: 'https:\\/\\/0750000x.index-education.net\\/pronote\\/' },
-        ],
-      }),
+      body:
+        '<!doctype html><html><body><script>window.apps=' +
+        '{"applications":[{"nom":"PRONOTE","url":"https:\\/\\/0750000x.index-education.net\\/pronote\\/"}]}' +
+        '</script></body></html>',
     },
   })
 
@@ -852,53 +830,24 @@ test('la découverte lit aussi les listes JSON du portail', async () => {
   )
 })
 
-test('les pages de navigation sont explorées après les services', async () => {
-  const portal = createFakePortal({
-    'https://psn.monlycee.net/': {
-      body: '<!doctype html><html><body><a href="/mon-espace">Mon espace</a></body></html>',
-    },
-    '/mon-espace': {
-      body: '<!doctype html><html><body><a href="https://0751234a.index-education.net/pronote/">PRONOTE</a></body></html>',
-    },
-  })
-
-  const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl)
-  assert.ok(portal.calls.includes('https://psn.monlycee.net/mon-espace'))
-  assert.equal(
-    candidates[0],
-    'https://0751234a.index-education.net/pronote/eleve.html',
-  )
-})
-
-test('les liens de déconnexion ne sont jamais suivis', async () => {
-  const portal = createFakePortal({
-    'https://psn.monlycee.net/': {
-      body: '<!doctype html><html><body><a href="/deconnexion">Se déconnecter</a></body></html>',
-    },
-  })
-
-  await discoverPronoteCandidates(jar, portal.fetchImpl)
-  assert.ok(!portal.calls.includes('https://psn.monlycee.net/deconnexion'))
-})
-
 test('le code établissement du portail reconstruit l’adresse PRONOTE', async () => {
   const portal = createFakePortal({
     'https://psn.monlycee.net/': {
-      body: '<!doctype html><html><body>Lycée (0751234A) — aucun lien utile</body></html>',
+      body: '<!doctype html><html><body>Lycée (0751234A) — aucune tuile utile</body></html>',
     },
   })
 
   const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl)
-  assert.equal(candidates[0], 'https://0751234a.index-education.net/pronote/eleve.html')
+  assert.deepEqual(candidates, ['https://0751234a.index-education.net/pronote/eleve.html'])
 })
 
-test('un RNE fourni par l’identité suffit à proposer une adresse', async () => {
+test('un RNE fourni par l’identité suffit, sans tuile', async () => {
   const portal = createFakePortal({
     'https://psn.monlycee.net/': { body: '<!doctype html><html><body>Portail</body></html>' },
   })
 
   const candidates = await discoverPronoteCandidates(jar, portal.fetchImpl, '0759999Z')
-  assert.ok(candidates.includes('https://0759999z.index-education.net/pronote/eleve.html'))
+  assert.deepEqual(candidates, ['https://0759999z.index-education.net/pronote/eleve.html'])
 })
 
 test('le bloc Start est lu même avec des accolades dans une valeur', () => {
