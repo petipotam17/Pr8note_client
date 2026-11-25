@@ -5,6 +5,7 @@ import { deflateRawSync, inflateRawSync } from 'node:zlib'
 import {
   describePronoteError,
   discoverPronoteCandidates,
+  entLoginForm,
   fetchSchoolData,
   md5Hex,
   normalizePronoteUrl,
@@ -508,6 +509,40 @@ test('les attributs Start sont lus dans la page PRONOTE', () => {
   assert.equal(attributes?.h, '4242')
   assert.equal(attributes?.e, 'e')
   assert.equal(attributes?.CrA, 'true')
+})
+
+test('le formulaire de connexion de l’ENT gère CAS et la connexion en deux temps', () => {
+  const cas = entLoginForm(
+    '<form method="post" action="/cas/login"><input type="hidden" name="_csrf" value="jeton">' +
+      '<input name="_username"><input type="password" name="_password">' +
+      '<button type="submit" name="_eventId" value="submit">OK</button></form>',
+    'https://psn.monlycee.net/cas/login',
+    { username: 'eleve.demo', password: 'secret' },
+  )
+  assert.ok(cas)
+  assert.equal(cas.action, 'https://psn.monlycee.net/cas/login')
+  const params = new URLSearchParams(cas.body)
+  assert.equal(params.get('_username'), 'eleve.demo')
+  assert.equal(params.get('_password'), 'secret')
+  assert.equal(params.get('_csrf'), 'jeton')
+  assert.equal(params.get('_eventId'), 'submit')
+
+  // Connexion en deux temps : l'identifiant seul, puis le mot de passe.
+  const firstStep = entLoginForm(
+    '<form method="post" action="/login"><input name="username"></form>',
+    'https://psn.monlycee.net/login',
+    { username: 'eleve.demo', password: 'secret' },
+  )
+  assert.ok(firstStep)
+  assert.equal(firstStep.body, 'username=eleve.demo')
+
+  // Un champ de recherche n'est jamais rempli avec l'identifiant.
+  const search = entLoginForm(
+    '<form method="post" action="/recherche"><input name="q"></form>',
+    'https://psn.monlycee.net/recherche',
+    { username: 'eleve.demo', password: 'secret' },
+  )
+  assert.equal(search, null)
 })
 
 test('une session PRONOTE réelle est lue et normalisée', async () => {

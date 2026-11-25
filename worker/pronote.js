@@ -1031,7 +1031,7 @@ function ssoForm(html) {
  * @param {string} pageUrl
  * @param {{ username: string; password: string } | null} credentials
  */
-function entLoginForm(html, pageUrl, credentials) {
+export function entLoginForm(html, pageUrl, credentials) {
   if (!credentials?.username || !credentials?.password) return null
   let page
   try {
@@ -1073,18 +1073,30 @@ function entLoginForm(html, pageUrl, credentials) {
       passwordField ||= name
     } else if (type === 'hidden') {
       fields.set(name, value)
+    } else if (type === 'submit' || type === 'image') {
+      // CAS attend souvent le bouton « _eventId=submit » comme champ.
+      if (value) fields.set(name, value)
     } else if (type === 'text' || type === 'email' || type === 'tel') {
       textFields.push(name)
     }
   }
-  if (needsSecondStep || !passwordField) return null
+  for (const button of markup[0].match(/<button\b[^>]*>/gi) ?? []) {
+    const name = /name=["']([^"']+)["']/i.exec(button)?.[1]
+    const value = /value=["']([^"']*)["']/i.exec(button)?.[1]
+    if (name && value) fields.set(name, value)
+  }
+  if (needsSecondStep) return null
 
-  const usernameField =
-    textFields.find((name) => /user|login|ident|mail|courriel|compte/i.test(name)) ?? textFields[0]
-  if (!usernameField) return null
+  const usernameField = textFields.find((name) =>
+    /user|login|ident|mail|courriel|compte/i.test(name),
+  )
+  // Connexion en deux temps : d'abord l'identifiant seul, puis le mot de
+  // passe. On n'accepte un formulaire sans mot de passe que si son champ est
+  // clairement un identifiant, jamais un champ de recherche.
+  if (!passwordField && !usernameField) return null
 
-  fields.set(usernameField, credentials.username)
-  fields.set(passwordField, credentials.password)
+  if (usernameField) fields.set(usernameField, credentials.username)
+  if (passwordField) fields.set(passwordField, credentials.password)
   return { action: action.toString(), body: fields.toString() }
 }
 
