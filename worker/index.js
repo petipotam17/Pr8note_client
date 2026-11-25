@@ -417,7 +417,7 @@ async function recordNetworkFailure(db, failure) {
         target.search.length,
         typeof failure.body === 'string' ? failure.body.length : -1,
         String(typed?.name ?? '').slice(0, 60),
-        String(typed?.message ?? '').slice(0, 200),
+        String(typed?.message ?? '').slice(0, 900),
         String(typed?.cause?.code ?? '').slice(0, 80),
         String(typed?.cause?.message ?? '').slice(0, 200),
       )
@@ -471,6 +471,8 @@ async function fetchFollowing(url, init, jar, options = {}) {
         redirect: 'manual',
         signal: controller.signal,
       })
+      const trace = options.budget?.trace
+      if (Array.isArray(trace) && trace.length < 80) trace.push(`M${response.status}`)
     } catch (error) {
       if (error instanceof LoginError) throw error
       const aborted = error instanceof Error && error.name === 'AbortError'
@@ -668,12 +670,9 @@ export function parseIdentityPayload(payload, username) {
  * @param {typeof fetch} [fetchImpl]
  */
 async function readIdentity(jar, username, fetchImpl = fetch, budget = null) {
-  const endpoints = [
-    `${PORTAL_ORIGIN}/oauth2/userinfo`,
-    `${PORTAL_ORIGIN}/directory/user/me`,
-    `${PORTAL_ORIGIN}/directory/api/user/me`,
-    `${PORTAL_ORIGIN}/user/me`,
-  ]
+  // Deux points d'entrée suffisent : chaque essai coûte des requêtes dans
+  // une invocation déjà limitée à 50, et le second couvre le cas courant.
+  const endpoints = [`${PORTAL_ORIGIN}/oauth2/userinfo`, `${PORTAL_ORIGIN}/directory/user/me`]
 
   for (const endpoint of endpoints) {
     try {
@@ -714,7 +713,7 @@ const SCHOOL_ATTEMPTS_BUDGET_MS = 30_000
 // L'hébergeur limite les requêtes sortantes d'une invocation (50). On garde
 // une marge pour la réponse et on s'arrête nous-mêmes au lieu de laisser
 // PRONOTE échouer sur un message interne incompréhensible.
-const SUBREQUEST_BUDGET = 44
+const SUBREQUEST_BUDGET = 38
 
 /**
  * Erreur PRONOTE telle qu'elle est renvoyée au client, avec son code d'étape
@@ -803,7 +802,7 @@ export async function loginToMonlycee(username, password, options = {}) {
   const jar = new CookieJar()
   // Compteur partagé par toute la connexion (MonLycée puis PRONOTE) : la
   // limite de l'hébergeur porte sur l'invocation, pas sur un service.
-  const budget = { used: 0, max: SUBREQUEST_BUDGET }
+  const budget = { used: 0, max: SUBREQUEST_BUDGET, trace: [] }
   // Repères temporaires : nombre de requêtes consommées à chaque étape.
   const marks = []
   const mark = (phase) => marks.push(`${phase}:${budget.used}`)
@@ -910,6 +909,7 @@ export async function loginToMonlycee(username, password, options = {}) {
 
   mark('login')
   const identity = await readIdentity(jar, username, fetchImpl, budget)
+  mark('id')
   const student = identity.student
   const verifiedAt = new Date().toISOString()
 
@@ -940,13 +940,14 @@ export async function loginToMonlycee(username, password, options = {}) {
         method: 'FLOW',
         url: 'https://flow.invalid/',
         body: '',
-        error: {
-          name: 'Flow',
-          message: `budget ${budget.used}/${budget.max} · ${tried.size} adresse(s) · ${marks.join(' ')}`.slice(
-            0,
-            200,
-          ),
-        },
+                  error: {
+            name: 'Flow',
+            message:
+              `budget ${budget.used}/${budget.max} · ${tried.size} adresse(s) · ${marks.join(' ')} · ${budget.trace.join(' ')}`.slice(
+                0,
+                900,
+              ),
+          },
       })
       if (written && typeof written.then === 'function') await written
     } catch {
@@ -994,6 +995,7 @@ export async function loginToMonlycee(username, password, options = {}) {
         budget,
         progress,
       })
+      mark(`ok${tried.size}`)
       break
     } catch (error) {
       if (progress.addressConfirmed && error instanceof PronoteError) {
@@ -1035,6 +1037,10 @@ export async function loginToMonlycee(username, password, options = {}) {
       schoolError: schoolFailure(failure, tried.size),
     }
   }
+
+  // Repère écrit dès l'ouverture de la session : si la synchronisation
+  // dépasse ensuite le budget, la consommation par étape reste lisible.
+  await recordFlow()
 
   try {
     const school = await readSchoolData(connection, { fetchImpl })

@@ -376,6 +376,19 @@ function budgetExhausted() {
   )
 }
 
+/**
+ * Trace compacte des allers-retours PRONOTE (lettre d'hôte + statut), pour
+ * savoir où passe le budget de requêtes sans révéler d'adresse ni de jeton.
+ *
+ * @param {{ budget?: { trace?: string[] } } | undefined} options
+ * @param {string} token
+ */
+function noteTrace(options, token) {
+  const trace = options?.budget?.trace
+  if (!Array.isArray(trace) || trace.length >= 80) return
+  trace.push(token)
+}
+
 function takeSubrequest(options) {
   const budget = options?.budget
   if (!budget) return
@@ -515,6 +528,16 @@ async function fetchWithJar(url, init, jar, options) {
     }
 
     jar.absorb(response, current.toString())
+    noteTrace(
+      options,
+      `${
+        host === options.entryHost
+          ? 'P'
+          : isEntHostname(host) || host.endsWith('monlycee.net')
+            ? 'E'
+            : 'X'
+      }${response.status}`,
+    )
 
     const location = response.headers.get('location')
     if (response.status >= 300 && response.status < 400 && location) {
