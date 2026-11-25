@@ -112,6 +112,14 @@ export async function signInWithMonlyceePassword(
       )
     }
 
+    // Des données PRONOTE présentes mais incomplètes ne doivent pas être
+    // jetées en silence : sans erreur associée, l'écran afficherait une
+    // session « sans diagnostic » au lieu de dire ce qui a échoué.
+    if (payload.school !== null && payload.school !== undefined && !isSchool(payload.school)) {
+      throw new Error(
+        'Le serveur a renvoyé des données PRONOTE incomplètes. Réessaie dans quelques instants. · code C4',
+      )
+    }
     const school = isSchool(payload.school) ? payload.school : null
     // Une adresse devinée n'est mémorisée que si elle a réellement ouvert
     // PRONOTE ; une adresse saisie à la main est conservée telle quelle.

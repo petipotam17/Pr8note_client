@@ -35,7 +35,14 @@ export function AuthCallback({ onFinish }: { onFinish: (destination?: string) =>
     requestRef.current
       .then(({ student }) => {
         if (!active) return
-        signIn(student)
+        // La connexion OIDC prouve l'identité, mais elle n'ouvre pas la
+        // session PRONOTE : le dire clairement évite l'écran muet S0.
+        signIn(student, null, {
+          code: 'PRONOTE_SESSION_REQUIRED',
+          stage: 'S1',
+          message:
+            'La connexion OIDC confirme ton identité mais n’ouvre pas ta session PRONOTE. Utilise la connexion élève MonLycée pour lire tes vraies notes, ton emploi du temps et tes devoirs. · code S1',
+        })
         setState({ status: 'success', student })
       })
       .catch((error: unknown) => {

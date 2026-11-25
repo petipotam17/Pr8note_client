@@ -389,7 +389,7 @@ export function Layout() {
                 <h1 style={{ marginBottom: 8 }}>Tes données PRONOTE ne sont pas encore accessibles.</h1>
                 <p style={{ color: 'var(--text-soft)', marginBottom: 18 }}>
                   {state.schoolError?.message ??
-                    'PRONOTE n’a pas été synchronisé et cette session ne contient aucun diagnostic : elle vient d’une tentative précédente. Rouvre la connexion pour relancer la vérification. · code S0'}
+                    'Aucune vérification PRONOTE n’a été enregistrée pour cette session : elle date d’une tentative précédente. Rouvre la connexion et reconnecte-toi pour relancer la vérification. · code S0'}
                 </p>
                 <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
                   <Link to="/connexion" className="btn btn-primary">
