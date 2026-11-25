@@ -6,6 +6,7 @@ import {
   describePronoteError,
   discoverPronoteCandidates,
   entLoginForm,
+  entryCandidates,
   fetchSchoolData,
   md5Hex,
   normalizePronoteUrl,
@@ -509,6 +510,15 @@ test('les attributs Start sont lus dans la page PRONOTE', () => {
   assert.equal(attributes?.h, '4242')
   assert.equal(attributes?.e, 'e')
   assert.equal(attributes?.CrA, 'true')
+})
+
+test('les points d’entrée essaient aussi l’espace parent', () => {
+  const candidates = entryCandidates('https://0751234a.index-education.net/pronote/eleve.html')
+  assert.ok(
+    candidates.includes('https://0751234a.index-education.net/pronote/parent.html'),
+    `espace parent absent de ${JSON.stringify(candidates)}`,
+  )
+  assert.ok(candidates.includes('https://0751234a.index-education.net/pronote/eleve.html'))
 })
 
 test('le formulaire de connexion de l’ENT gère CAS et la connexion en deux temps', () => {

@@ -820,7 +820,10 @@ export async function loginToMonlycee(username, password, options = {}) {
   const credentials = { username, password }
   const tried = new Set()
   const candidates = savedUrl ? [savedUrl] : []
-  let discoveryPending = !savedUrl
+  // L'adresse saisie garde la priorité, mais la découverte reste le filet de
+  // sécurité si elle ne mène plus à rien (adresse périmée, lien expiré,
+  // établissement changé).
+  let discoveryPending = true
   let connection = null
   let pronoteUrl = savedUrl || ''
   let failure = null
@@ -879,7 +882,9 @@ export async function loginToMonlycee(username, password, options = {}) {
       student,
       verifiedAt,
       school: null,
-      pronoteUrl: pronoteUrl || null,
+      // On ne renvoie que l'adresse que l'élève avait lui-même fournie :
+      // une adresse devinée qui a échoué ne doit pas être mémorisée.
+      pronoteUrl: savedUrl || null,
       schoolError: schoolFailure(failure, tried.size),
     }
   }
@@ -898,7 +903,7 @@ export async function loginToMonlycee(username, password, options = {}) {
       student,
       verifiedAt,
       school: null,
-      pronoteUrl,
+      pronoteUrl: savedUrl || pronoteUrl,
       schoolError: schoolFailure(error, tried.size),
     }
   }

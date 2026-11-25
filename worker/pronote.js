@@ -1107,7 +1107,7 @@ export function entLoginForm(html, pageUrl, credentials) {
  *
  * @param {string} normalized
  */
-function entryCandidates(normalized) {
+export function entryCandidates(normalized) {
   const base = new URL(normalized)
   const directory = base.pathname.replace(/[^/]*$/, '') || '/'
   const plain = (pathname) => `${base.origin}${pathname}`
@@ -1115,7 +1115,10 @@ function entryCandidates(normalized) {
   const candidates = [
     normalized,
     plain(`${directory}eleve.html`),
+    // Un compte parent de l'ENT ouvre l'espace parent, pas l'espace élève.
+    plain(`${directory}parent.html`),
     plain('/pronote/eleve.html'),
+    plain('/pronote/parent.html'),
     plain('/pronote/'),
     loginCandidate,
   ].filter((value) => Boolean(value))

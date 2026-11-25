@@ -111,7 +111,11 @@ export async function signInWithMonlyceePassword(
     }
 
     const school = isSchool(payload.school) ? payload.school : null
-    if (payload.pronoteUrl) savePronoteUrl(payload.pronoteUrl)
+    // Une adresse devinée n'est mémorisée que si elle a réellement ouvert
+    // PRONOTE ; une adresse saisie à la main est conservée telle quelle.
+    if (payload.pronoteUrl && (school || pronoteUrl?.trim())) {
+      savePronoteUrl(payload.pronoteUrl)
+    }
 
     return {
       student: {
