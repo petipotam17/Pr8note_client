@@ -346,7 +346,12 @@ function e3RequestClass(method, pathname) {
         : path === '/'
           ? '4'
           : '5'
-  return `${letter}${page}`
+  if (page !== '5') return `${letter}${page}`
+  // Pour une page inhabituelle, le nom du fichier évite de deviner : il ne
+  // contient ni hôte, ni identifiant, ni jeton.
+  const file = path.split('/').filter(Boolean).pop() || ''
+  const hint = file.replace(/[^a-z0-9._-]/gi, '').slice(0, 20)
+  return hint ? `${letter}5-${hint}` : `${letter}5`
 }
 
 /**
@@ -1133,21 +1138,28 @@ async function readEntryPage(url, jar, options) {
   let body
   let page = null
   let logins = 0
+  // Page d'où part le formulaire : un navigateur l'envoie en Referer, et les
+  // protections des sites refusent parfois un POST qui n'en a pas.
+  let referer = url
 
   for (let hop = 0; hop <= MAX_ENTRY_HOPS; hop += 1) {
+    const headers = { ...HTML_HEADERS }
+    if (method === 'POST') {
+      headers['Content-Type'] = 'application/x-www-form-urlencoded'
+      headers.Referer = referer
+      try {
+        headers.Origin = new URL(referer).origin
+      } catch {
+        // Une page de départ illisible n'empêche pas l'envoi.
+      }
+    }
     const { response, finalUrl } = await fetchWithJar(
       current,
-      {
-        method,
-        body,
-        headers:
-          method === 'POST'
-            ? { ...HTML_HEADERS, 'Content-Type': 'application/x-www-form-urlencoded' }
-            : HTML_HEADERS,
-      },
+      { method, body, headers },
       jar,
       options,
     )
+    referer = finalUrl
     const html = await response.text()
     page = { response, finalUrl, html, attributes: parseStartAttributes(html), logins }
     if (page.attributes || !response.ok) return page
