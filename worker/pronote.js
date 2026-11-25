@@ -21,7 +21,11 @@ const HTML_HEADERS = {
   'Accept-Language': 'fr-FR,fr;q=0.9',
   'User-Agent': PRONOTE_USER_AGENT,
 }
-const MAX_ENTRY_HOPS = 3
+const MAX_ENTRY_HOPS = 4
+// Domaines de l'ENT et de PRONOTE. Seuls eux peuvent être contactés ou
+// suivre une redirection, y compris quand l'établissement utilise un alias
+// (www.index-education.net) ou une page servie par le portail.
+const TRUSTED_HOST_SUFFIXES = ['monlycee.net', 'index-education.net', 'index-education.com']
 
 const MAX_MESSAGES = 6
 const MAX_MESSAGES_PER_THREAD = 12
@@ -253,6 +257,30 @@ function normalizeHost(value) {
 }
 
 /**
+ * @param {string} host
+ * @param {Set<string>} allowed
+ */
+function isTrustedHost(host, allowed) {
+  if (allowed.has(host)) return true
+  return TRUSTED_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))
+}
+
+/** @param {string} value */
+function isEntHostname(value) {
+  const host = normalizeHost(value)
+  return host === 'monlycee.net' || host.endsWith('.monlycee.net')
+}
+
+/** @param {string} url */
+function isEntHost(url) {
+  try {
+    return isEntHostname(new URL(url).hostname)
+  } catch {
+    return false
+  }
+}
+
+/**
  * Suit les redirections en conservant les cookies du portail MonLycée.
  * Seuls les hôtes explicitement autorisés sont contactés.
  *
@@ -269,11 +297,14 @@ async function fetchWithJar(url, init, jar, options) {
   let body = init.body
 
   for (let redirect = 0; redirect <= PRONOTE_MAX_REDIRECTS; redirect += 1) {
+    if (current.protocol === 'http:') {
+      current = new URL(`https://${current.host}${current.pathname}${current.search}`)
+    }
     const host = normalizeHost(current.hostname)
     if (current.protocol !== 'https:') {
       throw new PronoteError('PRONOTE_URL', 'L’adresse PRONOTE doit utiliser HTTPS.')
     }
-    if (!allowedHosts.has(host) && !host.endsWith('.monlycee.net') && host !== 'monlycee.net') {
+    if (!isTrustedHost(host, allowedHosts)) {
       throw new PronoteError('PRONOTE_URL', 'PRONOTE a redirigé vers un service non autorisé.')
     }
 
@@ -340,7 +371,7 @@ async function fetchWithJar(url, init, jar, options) {
  * @returns {string | null}
  */
 export function normalizePronoteUrl(input) {
-  const raw = input.trim()
+  const raw = String(input || '').trim()
   if (!raw) return null
 
   let candidate = raw
@@ -352,7 +383,10 @@ export function normalizePronoteUrl(input) {
   } catch {
     return null
   }
-  if (url.protocol !== 'https:' || url.port || url.username || url.password) return null
+  // Une adresse collée depuis la barre du navigateur peut garder « :443 ».
+  if (url.username || url.password) return null
+  if (url.port && url.port !== '443') return null
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
 
   const host = normalizeHost(url.hostname)
   if (
@@ -360,15 +394,25 @@ export function normalizePronoteUrl(input) {
     host.endsWith('.local') ||
     host.endsWith('.internal') ||
     /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ||
-    host.includes(':')
+    host.includes(':') ||
+    !host.includes('.')
   ) {
     return null
   }
 
+  url.protocol = 'https:'
+  url.port = ''
   url.searchParams.delete('login')
-  if (!url.pathname.includes('/pronote')) return null
-  if (url.pathname.endsWith('/')) url.pathname += 'eleve.html'
-  if (!/\.html?$/i.test(url.pathname)) url.pathname = `${url.pathname.replace(/\/$/, '')}/eleve.html`
+
+  // L'élève peut coller l'adresse exacte de son Espace élève, celle du
+  // portail de son lycée, une adresse avec un jeton d'accès ou simplement le
+  // domaine PRONOTE : toutes ces formes sont valables. On ne complète le
+  // chemin que lorsqu'il désigne clairement le dossier PRONOTE, pour ne pas
+  // casser une adresse personnalisée ni un lien signé.
+  if (/\/pronote\/?$/i.test(url.pathname)) {
+    if (!url.pathname.endsWith('/')) url.pathname += '/'
+    url.pathname += 'eleve.html'
+  }
 
   url.hash = ''
   return url.toString()
@@ -397,7 +441,9 @@ export async function discoverPronoteUrl(jar, fetchImpl = fetch) {
       { fetchImpl, allowedHosts: new Set(['psn.monlycee.net', 'auth.monlycee.net']) },
     )
     if (!response.ok) return null
-    const html = await response.text()
+    // Les portails construisent souvent leurs liens dans du JSON, où les
+    // barres obliques sont échappées (https:\/\/…).
+    const html = (await response.text()).replace(/\\\//g, '/')
 
     const absolute = html.match(/https?:\/\/[^\s"'<>]+/gi) || []
     for (const link of absolute) {
@@ -679,15 +725,18 @@ class PronoteSession {
 function clientRedirect(html, baseUrl) {
   const patterns = [
     /<meta[^>]+http-equiv=["']?refresh["']?[^>]*content=["'][^"']*url=([^"';]+)/i,
-    /(?:window\.|top\.)?location\.(?:replace|assign)\s*\(\s*["']([^"']+)["']/i,
-    /(?:window\.|top\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']/i,
-    /<iframe[^>]+src=["']([^"']+)["']/i,
+    /(?:window\.|top\.|parent\.|document\.)?location\.(?:replace|assign)\s*\(\s*["']([^"']+)["']/i,
+    /(?:window\.|top\.|parent\.|document\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']/i,
+    /window\.open\s*\(\s*["']([^"']+)["']/i,
+    /<(?:iframe|frame)[^>]+src=["']([^"']+)["']/i,
   ]
   for (const pattern of patterns) {
     const match = pattern.exec(html)
     if (!match) continue
+    const target = match[1].trim().replace(/&amp;/gi, '&').replace(/\\\//g, '/')
+    if (!target || /^(?:javascript:|about:blank|#)/i.test(target)) continue
     try {
-      return new URL(match[1].trim(), baseUrl).toString()
+      return new URL(target, baseUrl).toString()
     } catch {
       continue
     }
@@ -706,18 +755,116 @@ function ssoForm(html) {
   const markup = /<form\b[^>]*>[\s\S]*?<\/form>/i.exec(html)
   if (!markup) return null
   const open = /<form\b[^>]*>/i.exec(markup[0])?.[0] ?? ''
-  if ((/method=["']?([a-z]+)/i.exec(open)?.[1] ?? 'get').toLowerCase() !== 'post') return null
+  const method = (/method=["']?([a-z]+)/i.exec(open)?.[1] ?? 'get').toLowerCase()
+  if (method !== 'post' && method !== 'get') return null
+  if (/captcha|otp|totp|two.factor|deux étapes/i.test(markup[0])) return null
 
   const fields = new URLSearchParams()
   for (const input of markup[0].match(/<input\b[^>]*>/gi) ?? []) {
     const name = /name=["']([^"']+)["']/i.exec(input)?.[1]
     if (!name) continue
-    if ((/type=["']([^"']+)["']/i.exec(input)?.[1] ?? 'text').toLowerCase() !== 'hidden') continue
+    // Un formulaire qui affiche des champs à remplir est une page de
+    // connexion : il n'est jamais soumis à la place de l'élève.
+    if ((/type=["']([^"']+)["']/i.exec(input)?.[1] ?? 'text').toLowerCase() !== 'hidden') return null
     if (/pass|user|login|identifiant|email|courriel/i.test(name)) return null
-    fields.set(name, /value=["']([^"']*)["']/i.exec(input)?.[1] ?? '')
+    fields.set(name, (/value=["']([^"']*)["']/i.exec(input)?.[1] ?? '').replace(/&amp;/gi, '&'))
   }
   if (!fields.toString()) return null
-  return { action: /action=["']([^"']*)["']/i.exec(open)?.[1] ?? '', fields }
+  return {
+    action: /action=["']([^"']*)["']/i.exec(open)?.[1] ?? '',
+    method,
+    body: fields.toString(),
+  }
+}
+
+/**
+ * Formulaire de connexion de l'ENT rencontré pendant l'ouverture de PRONOTE.
+ *
+ * Seul un formulaire servi par MonLycée peut recevoir les identifiants de
+ * l'élève : un formulaire PRONOTE, un autre domaine ou une page demandant un
+ * code de vérification est ignoré.
+ *
+ * @param {string} html
+ * @param {string} pageUrl
+ * @param {{ username: string; password: string } | null} credentials
+ */
+function entLoginForm(html, pageUrl, credentials) {
+  if (!credentials?.username || !credentials?.password) return null
+  let page
+  try {
+    page = new URL(pageUrl)
+  } catch {
+    return null
+  }
+  if (!isEntHostname(page.hostname)) return null
+  if (/g-recaptcha|h-captcha|hcaptcha|cf-turnstile|recaptcha|captcha/i.test(html)) return null
+
+  const markup = /<form\b[^>]*>[\s\S]*?<\/form>/i.exec(html)
+  if (!markup) return null
+  const open = /^<form\b[^>]*>/i.exec(markup[0])?.[0] ?? ''
+  if ((/method=["']?([a-z]+)/i.exec(open)?.[1] ?? 'get').toLowerCase() !== 'post') return null
+
+  let action
+  try {
+    const rawAction = (/action=["']([^"']*)["']/i.exec(open)?.[1] ?? pageUrl).replace(/&amp;/gi, '&')
+    action = new URL(rawAction || pageUrl, page)
+  } catch {
+    return null
+  }
+  if (!isEntHostname(action.hostname)) return null
+
+  const fields = new URLSearchParams()
+  const textFields = []
+  let passwordField = ''
+  let needsSecondStep = false
+
+  for (const input of markup[0].match(/<input\b[^>]*>/gi) ?? []) {
+    const name = /name=["']([^"']+)["']/i.exec(input)?.[1]
+    if (!name) continue
+    const type = (/type=["']([^"']+)["']/i.exec(input)?.[1] ?? 'text').toLowerCase()
+    const value = (/value=["']([^"']*)["']/i.exec(input)?.[1] ?? '').replace(/&amp;/gi, '&')
+    if (type !== 'hidden' && /otp|totp|one.?time|webauthn|passkey|code/i.test(name)) {
+      needsSecondStep = true
+    }
+    if (type === 'password') {
+      passwordField ||= name
+    } else if (type === 'hidden') {
+      fields.set(name, value)
+    } else if (type === 'text' || type === 'email' || type === 'tel') {
+      textFields.push(name)
+    }
+  }
+  if (needsSecondStep || !passwordField) return null
+
+  const usernameField =
+    textFields.find((name) => /user|login|ident|mail|courriel|compte/i.test(name)) ?? textFields[0]
+  if (!usernameField) return null
+
+  fields.set(usernameField, credentials.username)
+  fields.set(passwordField, credentials.password)
+  return { action: action.toString(), body: fields.toString() }
+}
+
+/**
+ * Points d'entrée essayés, dans l'ordre : l'adresse exacte fournie par
+ * l'élève d'abord (elle peut contenir un jeton d'accès), puis les pages
+ * habituelles de l'Espace élève.
+ *
+ * @param {string} normalized
+ */
+function entryCandidates(normalized) {
+  const base = new URL(normalized)
+  const directory = base.pathname.replace(/[^/]*$/, '') || '/'
+  const plain = (pathname) => `${base.origin}${pathname}`
+  const loginCandidate = base.search ? null : `${plain(directory)}?login=true`
+  const candidates = [
+    normalized,
+    plain(`${directory}eleve.html`),
+    plain('/pronote/eleve.html'),
+    plain('/pronote/'),
+    loginCandidate,
+  ].filter((value) => Boolean(value))
+  return candidates.filter((value, index, all) => all.indexOf(value) === index)
 }
 
 /**
@@ -726,13 +873,14 @@ function ssoForm(html) {
  *
  * @param {string} url
  * @param {{ headerFor(url: string): string; absorb(response: Response, url: string): void }} jar
- * @param {{ fetchImpl?: typeof fetch; allowedHosts: Set<string> }} options
+ * @param {{ fetchImpl?: typeof fetch; allowedHosts: Set<string>; credentials?: { username: string; password: string } | null }} options
  */
 async function readEntryPage(url, jar, options) {
   let current = url
   let method = 'GET'
   let body
   let page = null
+  let logins = 0
 
   for (let hop = 0; hop <= MAX_ENTRY_HOPS; hop += 1) {
     const { response, finalUrl } = await fetchWithJar(
@@ -749,16 +897,30 @@ async function readEntryPage(url, jar, options) {
       options,
     )
     const html = await response.text()
-    page = { response, finalUrl, html, attributes: parseStartAttributes(html) }
+    page = { response, finalUrl, html, attributes: parseStartAttributes(html), logins }
     if (page.attributes || !response.ok) return page
+
+    // L'ENT redemande parfois une connexion au moment d'ouvrir PRONOTE : la
+    // session du portail ne couvre pas toujours la délégation CAS. On rejoue
+    // alors la connexion sur sa page, avec les identifiants qui sont déjà en
+    // mémoire pour cette requête (jamais stockés).
+    const login = entLoginForm(html, finalUrl, options.credentials)
+    if (login) {
+      logins += 1
+      if (logins > 2) return { ...page, logins }
+      method = 'POST'
+      body = login.body
+      current = login.action
+      continue
+    }
 
     const form = ssoForm(html)
     const next = form ? null : clientRedirect(html, finalUrl)
     if (!form && !next) return page
 
     if (form) {
-      method = 'POST'
-      body = form.fields.toString()
+      method = form.method
+      body = form.body
       current = new URL(form.action || finalUrl, finalUrl).toString()
     } else {
       method = 'GET'
@@ -775,34 +937,29 @@ async function readEntryPage(url, jar, options) {
  * @param {{ headerFor(url: string): string; absorb(response: Response, url: string): void; allowHost?(host: string): void }} config.jar
  * @param {typeof fetch} [config.fetchImpl]
  */
-export async function openPronoteSession({ url, jar, fetchImpl = fetch }) {
+export async function openPronoteSession({ url, jar, fetchImpl = fetch, credentials = null }) {
   const normalized = normalizePronoteUrl(url)
   if (!normalized) throw new PronoteError('PRONOTE_URL', 'L’adresse PRONOTE n’est pas valide.')
 
   const host = normalizeHost(new URL(normalized).hostname)
   if (typeof jar.allowHost === 'function') jar.allowHost(host)
   const allowedHosts = new Set([host])
+  const entryOptions = { fetchImpl, allowedHosts, credentials }
 
-  // L'adresse stockée peut être approximative : on essaie les points d'entrée
-  // habituels de l'Espace élève avant de conclure à une page inhabituelle.
-  const directory = normalized.replace(/[^/]*$/, '')
-  const candidates = [
-    normalized,
-    `${directory}eleve.html`,
-    `${directory}eleve.html?login=true`,
-    directory,
-  ].filter((value, index, all) => all.indexOf(value) === index)
+  const candidates = entryCandidates(normalized)
 
   let page = null
   let score = -1
+  let entLogins = 0
   for (const candidate of candidates) {
     let current
     try {
-      current = await readEntryPage(candidate, jar, { fetchImpl, allowedHosts })
+      current = await readEntryPage(candidate, jar, entryOptions)
     } catch (error) {
       if (error instanceof PronoteError && error.code === 'PRONOTE_REDIRECT') continue
       throw error
     }
+    entLogins += current.logins ?? 0
     if (current.attributes) {
       page = current
       break
@@ -817,9 +974,18 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch }) {
       page = current
       score = currentScore
     }
-    // Un refus ou la page de connexion PRONOTE ne s'amélioreront pas avec une
-    // autre adresse : on garde la cause la plus précise.
-    if (!current.response.ok || currentScore === 2) break
+    // Un refus explicite arrête les essais. Une page qui demande un mot de
+    // passe arrête aussi les essais, sauf si elle vient de l'ENT : la session
+    // vient peut-être d'être renouvelée pour l'adresse suivante.
+    if (!current.response.ok) break
+    if (currentScore === 2 && !isEntHost(current.finalUrl)) break
+  }
+
+  // La connexion à l'ENT a réussi pendant l'essai : PRONOTE peut maintenant
+  // accepter une nouvelle requête sur l'adresse exacte de l'élève.
+  if (!page?.attributes && entLogins > 0) {
+    const retry = await readEntryPage(candidates[0], jar, entryOptions)
+    if (retry.attributes || retry.response.ok) page = retry
   }
 
   if (!page) {
@@ -834,6 +1000,18 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch }) {
 
   const attributes = page.attributes
   if (!attributes) {
+    if (/adresse IP|trop de connexions|bloqu[ée]/i.test(page.html)) {
+      throw new PronoteError(
+        'PRONOTE_BLOCKED',
+        'PRONOTE bloque temporairement les connexions. Réessaie dans quelques minutes.',
+      )
+    }
+    if (isEntHost(page.finalUrl)) {
+      throw new PronoteError(
+        'PRONOTE_ACCESS',
+        'MonLycée n’a pas transmis la session PRONOTE. Ouvre PRONOTE depuis ton ENT une première fois, puis réessaie.',
+      )
+    }
     if (/mot de passe|identifiant|connexion/i.test(page.html)) {
       throw new PronoteError(
         'PRONOTE_ACCESS',
@@ -842,7 +1020,7 @@ export async function openPronoteSession({ url, jar, fetchImpl = fetch }) {
     }
     throw new PronoteError(
       'PRONOTE_PAGE',
-      'L’adresse PRONOTE ne mène pas à l’Espace élève. Vérifie l’adresse de ton lycée (elle finit par /pronote/eleve.html) puis réessaie.',
+      'PRONOTE a répondu sans ouvrir l’Espace élève. Vérifie l’adresse PRONOTE de ton lycée (elle finit par /pronote/eleve.html) puis réessaie.',
     )
   }
   if (!attributes.e || !attributes.f) {
@@ -1564,7 +1742,7 @@ export async function readSchoolData(connection, options = {}) {
  *
  * @param {{ url: string; jar: unknown; fetchImpl?: typeof fetch }} input
  */
-export async function fetchSchoolData({ url, jar, fetchImpl = fetch }) {
-  const connection = await openPronoteSession({ url, jar, fetchImpl })
+export async function fetchSchoolData({ url, jar, fetchImpl = fetch, credentials = null }) {
+  const connection = await openPronoteSession({ url, jar, fetchImpl, credentials })
   return readSchoolData(connection, { fetchImpl })
 }

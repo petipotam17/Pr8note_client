@@ -775,7 +775,14 @@ export async function loginToMonlycee(username, password, options = {}) {
   }
 
   try {
-    const school = await fetchSchoolData({ url: pronoteUrl, jar, fetchImpl })
+    const school = await fetchSchoolData({
+      url: pronoteUrl,
+      jar,
+      fetchImpl,
+      // Les identifiants restent en mémoire le temps de la requête : ils
+      // servent si l'ENT redemande une connexion en ouvrant PRONOTE.
+      credentials: { username, password },
+    })
     const enriched = {
       ...student,
       className: school.student.className || student.className,

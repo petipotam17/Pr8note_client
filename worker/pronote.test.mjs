@@ -291,9 +291,52 @@ function createFakePronote(options = {}) {
   const htmlPage = (body, status = 200) =>
     new Response(body, { status, headers: { 'Content-Type': 'text/html' } })
 
+  const log = []
+  const loginPageHtml =
+    '<!doctype html><html><body><form method="post" action="/realms/login">' +
+    '<input type="hidden" name="execution" value="jeton-ent">' +
+    '<input name="username" type="text"><input name="password" type="password">' +
+    '</form></body></html>'
+
   const fetchImpl = async (input, init = {}) => {
     const url = new URL(input)
+    log.push({
+      url: url.toString(),
+      method: String(init.method || 'GET').toUpperCase(),
+      body: String(init.body ?? ''),
+    })
+
+    // ENT MonLycée (Keycloak) : PRONOTE délègue l'authentification ici.
+    if (url.hostname === 'psn.monlycee.net') {
+      if (options.entry !== 'ent-login') return new Response('', { status: 404 })
+      if (url.pathname === '/realms/auth') return htmlPage(loginPageHtml)
+      if (url.pathname === '/realms/login') {
+        assert.equal(init.method, 'POST')
+        const body = new URLSearchParams(String(init.body))
+        if (body.get('username') !== 'eleve.demo' || body.get('password') !== 'mot-de-passe-ent') {
+          return htmlPage(loginPageHtml)
+        }
+        assert.equal(body.get('execution'), 'jeton-ent')
+        return htmlPage(
+          '<!doctype html><html><head><meta http-equiv="refresh" content="0; url=https://lycee.index-education.net/pronote/eleve.html?ent=ok"></head></html>',
+        )
+      }
+      return new Response('', { status: 404 })
+    }
+
     if (url.pathname.endsWith('eleve.html')) {
+      if (options.entry === 'ent-login' && !url.searchParams.has('ent')) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: 'https://psn.monlycee.net/realms/auth?service=pronote' },
+        })
+      }
+      if (options.entry === 'alias' && url.hostname.startsWith('lycee.')) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: 'https://www.index-education.net/pronote/eleve.html?alias=1' },
+        })
+      }
       if (options.access === 'forbidden') {
         return new Response('Accès refusé', { status: 403 })
       }
@@ -411,7 +454,7 @@ function createFakePronote(options = {}) {
     })
   }
 
-  return { fetchImpl }
+  return { fetchImpl, log }
 }
 
 const jar = {
@@ -434,8 +477,26 @@ test('l’adresse PRONOTE est normalisée et les hôtes locaux refusés', () => 
     normalizePronoteUrl('0751234A.index-education.net/pronote/'),
     'https://0751234a.index-education.net/pronote/eleve.html',
   )
+  // L'élève peut coller le domaine de son lycée, une page personnalisée ou
+  // un lien signé : l'adresse est conservée telle quelle.
+  assert.equal(
+    normalizePronoteUrl('https://pronote.monlycee.net'),
+    'https://pronote.monlycee.net/',
+  )
+  assert.equal(
+    normalizePronoteUrl('https://lycee.fr/espaces/eleves'),
+    'https://lycee.fr/espaces/eleves',
+  )
+  assert.equal(
+    normalizePronoteUrl('https://lycee.fr/pronote/eleve.html?sso=jeton'),
+    'https://lycee.fr/pronote/eleve.html?sso=jeton',
+  )
+  assert.equal(
+    normalizePronoteUrl('http://lycee.fr/pronote/'),
+    'https://lycee.fr/pronote/eleve.html',
+  )
   assert.equal(normalizePronoteUrl('http://127.0.0.1/pronote/'), null)
-  assert.equal(normalizePronoteUrl('https://exemple.fr/autre'), null)
+  assert.equal(normalizePronoteUrl('https://localhost/pronote/'), null)
 })
 
 test('les attributs Start sont lus dans la page PRONOTE', () => {
@@ -587,6 +648,53 @@ test('un formulaire SSO auto-posté par l’ENT ramène à PRONOTE', async () =>
   })
   assert.equal(school.grades.length, 3)
   assert.equal(school.student.className, 'Première 4')
+})
+
+test('une connexion ENT redemandée à l’ouverture de PRONOTE est rejouée', async () => {
+  const fake = createFakePronote({ entry: 'ent-login' })
+  const school = await fetchSchoolData({
+    url: 'https://lycee.index-education.net/pronote/eleve.html',
+    jar,
+    fetchImpl: fake.fetchImpl,
+    credentials: { username: 'eleve.demo', password: 'mot-de-passe-ent' },
+  })
+
+  assert.equal(school.currentPeriodId, 'T2')
+  assert.equal(school.generalAverage, 15.5)
+
+  const login = fake.log.find((entry) => entry.url.includes('/realms/login'))
+  assert.ok(login, 'le formulaire de l’ENT doit être soumis')
+  assert.equal(login.method, 'POST')
+  assert.ok(login.body.includes('username=eleve.demo'))
+  // Le mot de passe ne doit jamais apparaître dans une URL ni dans un message.
+  assert.ok(fake.log.every((entry) => !entry.url.includes('mot-de-passe-ent')))
+})
+
+test('sans identifiants, la connexion redemandée par l’ENT reste un refus explicite', async () => {
+  const fake = createFakePronote({ entry: 'ent-login' })
+  await assert.rejects(
+    () =>
+      fetchSchoolData({
+        url: 'https://lycee.index-education.net/pronote/eleve.html',
+        jar,
+        fetchImpl: fake.fetchImpl,
+      }),
+    (error) =>
+      error instanceof PronoteError &&
+      error.code === 'PRONOTE_ACCESS' &&
+      !/mot-de-passe-ent|psn\.monlycee/i.test(error.message),
+  )
+})
+
+test('une redirection vers un alias PRONOTE du même domaine est suivie', async () => {
+  const fake = createFakePronote({ entry: 'alias' })
+  const school = await fetchSchoolData({
+    url: 'https://lycee.index-education.net/pronote/eleve.html',
+    jar,
+    fetchImpl: fake.fetchImpl,
+  })
+  assert.equal(school.generalAverage, 15.5)
+  assert.ok(school.subjects.length >= 1)
 })
 
 test('une page sans bloc Start demande de vérifier l’adresse PRONOTE', async () => {
